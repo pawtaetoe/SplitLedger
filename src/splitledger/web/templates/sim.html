@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SplitLedger simulator</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 1rem auto; max-width: 34rem; padding: 0 1rem; }
+  #log { display: flex; flex-direction: column; gap: 0.5rem; margin: 1rem 0; }
+  .msg { background: #eef; border-radius: 0.5rem; padding: 0.5rem 0.75rem; }
+  .msg img { max-width: 100%; }
+  form, .row { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+  input[type="text"] { flex: 1; }
+</style>
+</head>
+<body>
+<h1>SplitLedger simulator</h1>
+<p>Chatting as <strong id="who"></strong>. Open another tab with a different user, e.g. <code>?user=bob</code>.</p>
+<div id="log" aria-live="polite"></div>
+<form id="text-form">
+  <label for="text">Message</label>
+  <input id="text" type="text" autocomplete="off">
+  <button type="submit">Send</button>
+</form>
+<div class="row">
+  <label for="image">Image</label>
+  <input id="image" type="file" accept="image/*">
+  <label for="audio">Audio</label>
+  <input id="audio" type="file" accept="audio/*">
+</div>
+<script>
+const user = new URLSearchParams(location.search).get("user") || "alice";
+document.getElementById("who").textContent = user;
+const log = document.getElementById("log");
+
+function render(messages) {
+  log.innerHTML = "";
+  for (const message of messages) {
+    const div = document.createElement("div");
+    div.className = "msg";
+    if (message.kind === "image") {
+      const img = document.createElement("img");
+      img.src = "/dev/chat/media/" + message.media_ref;
+      img.alt = message.caption || "image";
+      div.appendChild(img);
+    } else {
+      div.textContent = message.text || message.caption || message.kind;
+    }
+    if (message.buttons) {
+      for (const button of message.buttons) {
+        const el = document.createElement("button");
+        el.textContent = button.title;
+        el.addEventListener("click", () => tap(button.id));
+        div.appendChild(el);
+      }
+    }
+    log.appendChild(div);
+  }
+}
+
+async function post(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  render(data.messages);
+}
+
+async function tap(buttonId) {
+  await post("/dev/chat/button", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({user: user, button_id: buttonId})
+  });
+}
+
+document.getElementById("text-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = document.getElementById("text");
+  await post("/dev/chat/text", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({user: user, text: input.value})
+  });
+  input.value = "";
+});
+
+for (const kind of ["image", "audio"]) {
+  document.getElementById(kind).addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    await post("/dev/chat/upload?user=" + encodeURIComponent(user) + "&kind=" + kind, {
+      method: "POST",
+      body: file
+    });
+    event.target.value = "";
+  });
+}
+
+fetch("/dev/chat/history?user=" + encodeURIComponent(user))
+  .then((response) => response.json())
+  .then((data) => render(data.messages));
+setInterval(async () => {
+  const response = await fetch("/dev/chat/history?user=" + encodeURIComponent(user));
+  const data = await response.json();
+  render(data.messages);
+}, 2000);
+</script>
+</body>
+</html>
