@@ -1,0 +1,30 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "123",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "1555000111", "phone_number_id": "999"},
+            "contacts": [{"profile": {"name": "Alice"}, "wa_id": "6581234567"}],
+            "messages": [
+              {
+                "from": "6581234567",
+                "id": "wamid.button1",
+                "timestamp": "1730000003",
+                "type": "interactive",
+                "interactive": {
+                  "type": "button_reply",
+                  "button_reply": {"id": "save", "title": "Save"}
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

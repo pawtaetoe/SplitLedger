@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 
 from splitledger.channels.simulator import dev_router
+from splitledger.channels.whatsapp import whatsapp_router
 from splitledger.settings import settings
 
 app = FastAPI(title="SplitLedger")
+app.include_router(whatsapp_router)
 if settings.env == "dev":
     app.include_router(dev_router)
 
