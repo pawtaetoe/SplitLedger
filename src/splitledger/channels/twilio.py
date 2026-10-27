@@ -1,0 +1,144 @@
+import base64
+import hashlib
+import hmac
+import uuid
+from urllib.parse import parse_qsl
+
+import httpx
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
+
+from splitledger.channels.whatsapp import WhatsAppChannel
+from splitledger.contracts.messages import Inbound
+from splitledger.settings import settings
+
+API_BASE = "https://api.twilio.com/2010-04-01/Accounts"
+
+
+# check a twilio signature against the url and posted params
+def verify_signature(url: str, params: dict[str, str], header: str | None, token: str) -> bool:
+    if not header or not token:
+        return False
+    signed = url + "".join(f"{key}{params[key]}" for key in sorted(params))
+    digest = hmac.new(token.encode(), signed.encode(), hashlib.sha1).digest()
+    return hmac.compare_digest(base64.b64encode(digest).decode(), header)
+
+
+# turn one posted form into an inbound message
+def parse_inbound(params: dict[str, str]) -> Inbound | None:
+    user_id = params.get("WaId") or params.get("From", "").removeprefix("whatsapp:+")
+    message_id = params.get("MessageSid", "")
+    if not user_id or not message_id:
+        return None
+    body = params.get("Body") or None
+    if params.get("ButtonPayload"):
+        return Inbound(
+            message_id, user_id, "button", text=params.get("ButtonText"),
+            button_id=params["ButtonPayload"]
+        )
+    media_count = params.get("NumMedia", "0")
+    if media_count.isdigit() and int(media_count) > 0:
+        media_type = params.get("MediaContentType0", "")
+        media_ref = params.get("MediaUrl0")
+        if media_type.startswith("image/"):
+            return Inbound(message_id, user_id, "image", text=body, media_ref=media_ref)
+        if media_type.startswith("audio/"):
+            return Inbound(message_id, user_id, "audio", media_ref=media_ref)
+        return None
+    return Inbound(message_id, user_id, "text", text=body)
+
+
+# twilio sandbox transport, buttons become numbered options
+class TwilioTransport:
+    # credentials default from settings
+    def __init__(
+        self, account_sid: str | None = None, auth_token: str | None = None,
+        sender: str | None = None
+    ) -> None:
+        self._sid = account_sid or settings.twilio_account_sid
+        self._token = auth_token or settings.twilio_auth_token
+        self._from = sender or settings.twilio_whatsapp_from
+        self._media: dict[str, bytes] = {}
+        self._menus: dict[str, dict[str, str]] = {}
+
+    # post one message form to twilio
+    async def _post_message(self, to: str, fields: dict[str, str]) -> None:
+        form = {"From": self._from, "To": f"whatsapp:+{to}", **fields}
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{API_BASE}/{self._sid}/Messages.json", data=form, auth=(self._sid, self._token)
+            )
+        if response.is_error:
+            error = response.json()
+            raise RuntimeError(f"twilio {error.get('code')} {error.get('message')}")
+
+    # send one text message
+    async def send_text(self, to: str, text: str) -> None:
+        await self._post_message(to, {"Body": text})
+
+    # send text plus numbered options and remember them for the next reply
+    async def send_buttons(self, to: str, text: str, buttons: list[tuple[str, str]]) -> None:
+        numbered = list(enumerate(buttons, 1))
+        self._menus[to] = {str(number): button_id for number, (button_id, _) in numbered}
+        options = "\n".join(f"{number} {title}" for number, (_, title) in numbered)
+        await self.send_text(to, f"{text}\n{options}")
+
+    # keep the image and send twilio a public link to it
+    async def send_image(self, to: str, png: bytes, caption: str | None = None) -> None:
+        ref = uuid.uuid4().hex
+        self._media[ref] = png
+        link = f"{settings.public_base_url.rstrip('/')}/media/twilio/{ref}"
+        await self._post_message(to, {"Body": caption or "", "MediaUrl": link})
+
+    # download media from twilio with basic auth
+    async def fetch_media(self, media_ref: str) -> bytes:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            response = await client.get(media_ref, auth=(self._sid, self._token))
+            response.raise_for_status()
+            return response.content
+
+    # stored image bytes for the media route
+    def media_bytes(self, ref: str) -> bytes:
+        return self._media[ref]
+
+    # turn a digit reply into a button, any other message clears the menu
+    def apply_menu(self, inbound: Inbound) -> Inbound:
+        menu = self._menus.pop(inbound.user_id, None)
+        choice = (inbound.text or "").strip()
+        if menu and inbound.kind == "text" and choice in menu:
+            return Inbound(
+                inbound.message_id, inbound.user_id, "button", text=choice,
+                button_id=menu[choice]
+            )
+        return inbound
+
+
+transport = TwilioTransport()
+channel = WhatsAppChannel(transport)
+twilio_router = APIRouter()
+
+
+# accept one signed twilio delivery and queue its message
+@twilio_router.post("/webhook/twilio")
+async def webhook(request: Request, background: BackgroundTasks) -> Response:
+    params = dict(parse_qsl((await request.body()).decode(), keep_blank_values=True))
+    url = settings.public_base_url.rstrip("/") + "/webhook/twilio"
+    signature = request.headers.get("x-twilio-signature")
+    if not verify_signature(url, params, signature, settings.twilio_auth_token):
+        raise HTTPException(status_code=403, detail="bad signature")
+    inbound = parse_inbound(params)
+    if inbound is not None and await channel.claim(inbound.message_id):
+        await channel.queue.enqueue(transport.apply_menu(inbound))
+        background.add_task(channel.process_queued)
+    return Response("<Response/>", media_type="application/xml")
+
+
+# serve a stored image to twilio
+@twilio_router.get("/media/twilio/{ref}")
+async def media(ref: str) -> Response:
+    try:
+        data = transport.media_bytes(ref)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="media not found") from None
+    # echoed photos are jpeg so read the type from the first bytes
+    media_type = "image/jpeg" if data.startswith(b"\xff\xd8") else "image/png"
+    return Response(content=data, media_type=media_type)

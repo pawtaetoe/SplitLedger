@@ -6,15 +6,17 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import splitledger.channels.whatsapp as whatsapp
-from splitledger.main import app
 from splitledger.settings import settings
 from tests.fakes import FakeTransport
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "whatsapp"
 SECRET = "test-secret"
+app = FastAPI()
+app.include_router(whatsapp.whatsapp_router)
 
 
 # load one fixture payload
