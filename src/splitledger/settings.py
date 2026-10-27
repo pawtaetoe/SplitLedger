@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     whatsapp_verify_token: str = ""
     whatsapp_bot_number: str = ""
     whatsapp_provider: Literal["meta", "twilio"] = "meta"
+    locale: str = "global"
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_whatsapp_from: str = ""

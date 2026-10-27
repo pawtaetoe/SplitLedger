@@ -20,7 +20,8 @@ class FakeLLM:
         self, prompt: str, schema: type[T], images: Sequence[bytes] = ()
     ) -> T:
         self.structured_calls.append(prompt)
-        result = self.canned[prompt]
+        key = prompt if prompt in self.canned else prompt.split(":", 1)[0]
+        result = self.canned[key]
         assert isinstance(result, schema)
         return result
 

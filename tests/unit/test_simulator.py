@@ -1,11 +1,14 @@
 from fastapi.testclient import TestClient
 
 from splitledger.channels.simulator import simulator
+from splitledger.handlers.router import Router
 from splitledger.main import app
+from tests.fakes import FakeLogger
 
 
-# posting text to the simulator echoes it back through transport
-def test_simulator_text_echo():
+# posting text reaches the router and replies through transport
+def test_simulator_text_echo(monkeypatch):
+    monkeypatch.setattr(simulator, "router", Router(FakeLogger()))
     simulator.reset()
     client = TestClient(app)
     response = client.post("/dev/chat/text", json={"user": "alice", "text": "hello"})

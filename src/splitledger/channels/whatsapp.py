@@ -12,7 +12,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import ProcessedMessage
 from splitledger.db.session import SessionFactory
-from splitledger.handlers.router import Router
+from splitledger.handlers.router import Router, message_router
 from splitledger.jobs.queue import JobQueue
 from splitledger.settings import settings
 
@@ -146,11 +146,11 @@ class WhatsAppTransport:
 
 # webhook side, dedupe then queue then route
 class WhatsAppChannel:
-    # wire one transport to the echo router
-    def __init__(self, transport: Transport) -> None:
+    # wire one transport to a message router
+    def __init__(self, transport: Transport, router: Router) -> None:
         self.transport = transport
         self.queue = JobQueue()
-        self._router = Router()
+        self._router = router
 
     # claim a message id in the db, false when already seen
     async def claim(self, message_id: str) -> bool:
@@ -172,7 +172,7 @@ class WhatsAppChannel:
         await self.queue.process_all(self.handle)
 
 
-channel = WhatsAppChannel(WhatsAppTransport())
+channel = WhatsAppChannel(WhatsAppTransport(), message_router)
 whatsapp_router = APIRouter()
 
 

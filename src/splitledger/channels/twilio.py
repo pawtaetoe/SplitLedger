@@ -9,6 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from splitledger.channels.whatsapp import WhatsAppChannel
 from splitledger.contracts.messages import Inbound
+from splitledger.handlers.router import message_router
 from splitledger.settings import settings
 
 API_BASE = "https://api.twilio.com/2010-04-01/Accounts"
@@ -113,7 +114,7 @@ class TwilioTransport:
 
 
 transport = TwilioTransport()
-channel = WhatsAppChannel(transport)
+channel = WhatsAppChannel(transport, message_router)
 twilio_router = APIRouter()
 
 

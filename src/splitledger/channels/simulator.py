@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from splitledger.contracts.messages import Inbound
-from splitledger.handlers.router import Router
+from splitledger.handlers.router import Router, message_router
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "web" / "templates" / "sim.html"
 
@@ -56,10 +56,10 @@ class SimulatorTransport:
 # registry of per user simulator transports
 class Simulator:
     # start empty with one shared media store
-    def __init__(self) -> None:
+    def __init__(self, router: Router) -> None:
         self._media: dict[str, bytes] = {}
         self._transports: dict[str, SimulatorTransport] = {}
-        self._router = Router()
+        self.router = router
 
     # clear all state, for tests
     def reset(self) -> None:
@@ -85,11 +85,11 @@ class Simulator:
     # hand one inbound message to the router
     async def receive(self, inbound: Inbound) -> list[dict[str, object]]:
         transport = self.transport_for(inbound.user_id)
-        await self._router.handle(inbound, transport)
+        await self.router.handle(inbound, transport)
         return transport.sent
 
 
-simulator = Simulator()
+simulator = Simulator(message_router)
 dev_router = APIRouter()
 
 
