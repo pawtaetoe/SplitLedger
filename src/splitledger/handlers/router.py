@@ -11,9 +11,9 @@ from splitledger.settings import settings
 LOCALES = {"global": GLOBAL, "sg": SG}
 
 
-# routes one inbound message, text logs and the rest still echoes
+# routes one inbound message, text and receipts log and the rest still echoes
 class Router:
-    # expense logger for text and undo taps
+    # expense logger for text, receipts and their buttons
     def __init__(self, logger: ExpenseLogger) -> None:
         self._logger = logger
 
@@ -26,9 +26,12 @@ class Router:
         if inbound.kind == "button" and button_id.startswith("undo:"):
             await self._logger.undo(inbound, button_id.removeprefix("undo:"), transport)
             return
+        if inbound.kind == "button" and button_id.startswith("receipt:"):
+            key = button_id.removeprefix("receipt:")
+            await self._logger.confirm_receipt(inbound, key, transport)
+            return
         if inbound.kind == "image" and inbound.media_ref:
-            png = await transport.fetch_media(inbound.media_ref)
-            await transport.send_image(inbound.user_id, png, caption=inbound.text)
+            await self._logger.log_receipt(inbound, transport)
             return
         if inbound.kind == "button":
             await transport.send_text(inbound.user_id, button_id)

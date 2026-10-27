@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, User
 from splitledger.handlers.log import ExpenseLogger
-from splitledger.llm.schemas import GLOBAL, ExpenseDraft
+from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
 from tests.fakes import FakeLLM, FakeTransport
 
 ADMIN_URL = "postgresql://splitledger:splitledger@localhost:5432/splitledger"
@@ -119,3 +119,35 @@ async def test_missing_amount_asks(sessions):
     await ExpenseLogger(llm, sessions, GLOBAL).log(text("6581234567", "bought stuff"), transport)
     assert await count(sessions, LedgerEntry) == 0
     assert "How much" in transport.sent_text[0][1]
+
+
+# a receipt that adds up is saved as one receipt expense for its total
+async def test_receipt_saved_once(sessions):
+    receipt = ReceiptDraft(
+        vendor="Cafe", category="Dining", subtotal_cents=2000, service_cents=200,
+        total_cents=2200, items=[ReceiptItem(name="pasta", price_cents=2000)]
+    )
+    transport = FakeTransport()
+    transport.media["photo-1"] = b"jpeg-bytes"
+    logger = ExpenseLogger(FakeLLM({"parse_receipt": receipt}), sessions, GLOBAL)
+    photo = Inbound("m1", "6581234567", "image", media_ref="photo-1")
+    await logger.log_receipt(photo, transport)
+    await logger.log_receipt(photo, transport)
+    async with sessions() as session:
+        rows = (await session.execute(select(LedgerEntry.amount_cents, LedgerEntry.source))).all()
+    assert [(amount, source.value) for amount, source in rows] == [(2200, "RECEIPT")]
+    assert transport.sent_buttons[0][1] == "Logged USD 22.00 · Dining · Cafe"
+    assert transport.sent_text == [("6581234567", "You already logged this receipt")]
+
+
+# a confirmed mismatch is saved at the printed total
+async def test_confirmed_receipt_saved(sessions):
+    receipt = ReceiptDraft(total_cents=1500, subtotal_cents=900, category="Dining")
+    transport = FakeTransport()
+    transport.media["photo-1"] = b"jpeg-bytes"
+    logger = ExpenseLogger(FakeLLM({"parse_receipt": receipt}), sessions, GLOBAL)
+    await logger.log_receipt(Inbound("m1", "6581234567", "image", media_ref="photo-1"), transport)
+    assert await count(sessions, LedgerEntry) == 0
+    key = transport.sent_buttons[0][2][0][0].removeprefix("receipt:")
+    await logger.confirm_receipt(text("6581234567", "1"), key, transport)
+    assert await count(sessions, LedgerEntry) == 1

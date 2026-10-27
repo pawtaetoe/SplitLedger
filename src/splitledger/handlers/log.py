@@ -1,3 +1,4 @@
+import hashlib
 import re
 import uuid
 from decimal import Decimal
@@ -11,11 +12,13 @@ from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerEntry, LedgerKind, LedgerSource, LedgerStatus, User
-from splitledger.llm.schemas import CURRENCY_CODES, ExpenseDraft, Locale
+from splitledger.llm.schemas import CURRENCY_CODES, ExpenseDraft, Locale, ReceiptDraft
 
-PROMPT = (Path(__file__).parents[1] / "llm" / "prompts" / "parse_expense.md").read_text(
-    encoding="utf-8"
-)
+PROMPTS = Path(__file__).parents[1] / "llm" / "prompts"
+PROMPT = (PROMPTS / "parse_expense.md").read_text(encoding="utf-8")
+RECEIPT_PROMPT = f"parse_receipt: {(PROMPTS / 'parse_receipt.md').read_text(encoding='utf-8')}"
+# cents a printed total may be off by before we ask
+TOLERANCE = 5
 # optional currency symbol then an amount with up to two decimals
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 
@@ -39,12 +42,27 @@ def quick_parse(text: str, locale: Locale) -> ExpenseDraft | None:
     return None
 
 
+# true when the lines and charges add up to the printed totals
+def receipt_adds_up(receipt: ReceiptDraft) -> bool:
+    if receipt.total_cents is None:
+        return False
+    lines = sum(item.price_cents for item in receipt.items)
+    base = receipt.subtotal_cents if receipt.subtotal_cents is not None else lines
+    if receipt.items and abs(lines - base) > TOLERANCE:
+        return False
+    # a receipt with only a total has nothing to cross check
+    if not receipt.items and receipt.subtotal_cents is None:
+        return True
+    charges = receipt.service_cents + receipt.tax_cents - receipt.discount_cents
+    return abs(base + charges - receipt.total_cents) <= TOLERANCE
+
+
 # money for a reply line, the code reads clearly in any country
 def money(cents: int, currency: str) -> str:
     return f"{currency} {cents // 100}.{cents % 100:02d}"
 
 
-# logs text expenses and undoes them
+# logs text and receipt expenses and undoes them
 class ExpenseLogger:
     # model for messy text, a session factory for the ledger and the locale for keywords
     def __init__(
@@ -53,6 +71,8 @@ class ExpenseLogger:
         self._llm = llm
         self._sessions = sessions
         self._locale = locale
+        self._receipts: dict[str, ReceiptDraft] = {}
+        self._logged: set[tuple[str, str]] = set()
 
     # fast path first, then the model
     async def parse(self, text: str) -> ExpenseDraft:
@@ -70,23 +90,77 @@ class ExpenseLogger:
                 inbound.user_id, "How much was it? Try something like coffee 6.50"
             )
             return
+        await self._save(inbound, transport, draft, draft.amount_cents, LedgerSource.TEXT)
+
+    # read a receipt photo, save it when it adds up, else ask to confirm the total
+    async def log_receipt(self, inbound: Inbound, transport: Transport) -> None:
+        image = await transport.fetch_media(inbound.media_ref or "")
+        key = hashlib.sha256(image).hexdigest()
+        if (inbound.user_id, key) in self._logged:
+            await transport.send_text(inbound.user_id, "You already logged this receipt")
+            return
+        # the same photo is never sent to the model twice
+        receipt = self._receipts.get(key)
+        if receipt is None:
+            receipt = await self._llm.structured(RECEIPT_PROMPT, ReceiptDraft, images=[image])
+            self._receipts[key] = receipt
+        total = receipt.total_cents
+        if total is None or total <= 0:
+            await transport.send_text(
+                inbound.user_id, "I couldn't read the total. Type it instead, like lunch 23.40"
+            )
+            return
+        if not receipt_adds_up(receipt):
+            shown = money(total, receipt.currency or self._locale.currency)
+            await transport.send_buttons(
+                inbound.user_id,
+                f"The lines don't add up. Is the total {shown}?",
+                [(f"receipt:{key}", "Yes, save it")]
+            )
+            return
+        await self._save_receipt(inbound, transport, key)
+
+    # save a receipt the user confirmed
+    async def confirm_receipt(self, inbound: Inbound, key: str, transport: Transport) -> None:
+        if key not in self._receipts or (inbound.user_id, key) in self._logged:
+            await transport.send_text(inbound.user_id, "Nothing to save")
+            return
+        await self._save_receipt(inbound, transport, key)
+
+    # turn a stored receipt into one expense
+    async def _save_receipt(self, inbound: Inbound, transport: Transport, key: str) -> None:
+        receipt = self._receipts[key]
+        self._logged.add((inbound.user_id, key))
+        draft = ExpenseDraft(
+            amount_cents=receipt.total_cents,
+            currency=receipt.currency,
+            category=receipt.category,
+            vendor=receipt.vendor
+        )
+        await self._save(inbound, transport, draft, receipt.total_cents or 0, LedgerSource.RECEIPT)
+
+    # write one expense row and offer undo
+    async def _save(
+        self, inbound: Inbound, transport: Transport, draft: ExpenseDraft, amount: int,
+        source: LedgerSource
+    ) -> None:
         currency = draft.currency or self._locale.currency
         async with self._sessions() as session:
             entry = LedgerEntry(
                 user_id=await self._user_id(session, inbound.user_id),
                 kind=LedgerKind.EXPENSE,
-                amount_cents=draft.amount_cents,
+                amount_cents=amount,
                 currency=currency,
                 category=draft.category,
                 vendor=draft.vendor,
                 note=draft.note,
-                source=LedgerSource.TEXT,
+                source=source,
                 status=LedgerStatus.POSTED
             )
             session.add(entry)
             await session.commit()
         label = draft.vendor or draft.note or ""
-        summary = f"Logged {money(draft.amount_cents, currency)} · {draft.category}"
+        summary = f"Logged {money(amount, currency)} · {draft.category}"
         text = f"{summary} · {label}" if label else summary
         await transport.send_buttons(inbound.user_id, text, [(f"undo:{entry.id}", "Undo")])
 

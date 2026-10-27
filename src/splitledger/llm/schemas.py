@@ -66,6 +66,26 @@ class SmokeResult(BaseModel):
     text: str = ""
 
 
+# one line on a receipt with its line total
+class ReceiptItem(BaseModel):
+    name: str
+    qty: int = 1
+    price_cents: int
+
+
+# one receipt read from a photo, money in cents
+class ReceiptDraft(BaseModel):
+    vendor: str | None = None
+    currency: str | None = None
+    category: Category = "Other"
+    items: list[ReceiptItem] = []
+    subtotal_cents: int | None = None
+    service_cents: int = 0
+    tax_cents: int = 0
+    discount_cents: int = 0
+    total_cents: int | None = None
+
+
 # one expense parsed from a message, currency none means the locale default
 class ExpenseDraft(BaseModel):
     amount_cents: int | None

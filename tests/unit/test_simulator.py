@@ -27,8 +27,9 @@ def test_simulator_page_served():
     assert "SplitLedger simulator" in response.text
 
 
-# posting an image echoes the same bytes back
-def test_simulator_image_echo():
+# posting an image reaches the router and the same bytes come back
+def test_simulator_image_echo(monkeypatch):
+    monkeypatch.setattr(simulator, "router", Router(FakeLogger()))
     simulator.reset()
     client = TestClient(app)
     response = client.post(
