@@ -4,7 +4,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.db.models import BudgetPlan, User
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.plan import PlanManager
-from splitledger.llm.schemas import GLOBAL
+from splitledger.llm.schemas import GLOBAL, BucketDraft, CustomPlan
 from splitledger.plans.quota import QuotaBook
 from tests.fakes import FakeLLM, FakeTransport
 
@@ -38,7 +38,7 @@ async def log(logger: ExpenseLogger, transport: FakeTransport, body: str) -> str
 
 # the welcome goes out on the first message only
 async def test_welcome_once(sessions):
-    plans = PlanManager(sessions, QuotaBook(sessions), GLOBAL)
+    plans = PlanManager(sessions, QuotaBook(sessions), GLOBAL, FakeLLM())
     transport = FakeTransport()
     await plans.welcome_if_new(msg("text", "hi"), transport)
     await plans.welcome_if_new(msg("text", "hi again"), transport)
@@ -48,7 +48,7 @@ async def test_welcome_once(sessions):
 
 # set up saves the plan and income and shows weekly shares before saving
 async def test_set_up_saves_plan(sessions):
-    plans = PlanManager(sessions, QuotaBook(sessions), GLOBAL)
+    plans = PlanManager(sessions, QuotaBook(sessions), GLOBAL, FakeLLM())
     transport = FakeTransport()
     await set_up(plans, transport)
     confirm = transport.sent_buttons[-1][1]
@@ -64,7 +64,7 @@ async def test_set_up_saves_plan(sessions):
 # each log shows what is left and alerts once at 80 and once at 100
 async def test_quota_lines_and_alerts(sessions):
     book = QuotaBook(sessions)
-    plans = PlanManager(sessions, book, GLOBAL)
+    plans = PlanManager(sessions, book, GLOBAL, FakeLLM())
     transport = FakeTransport()
     await set_up(plans, transport)
     logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL, book)
@@ -90,7 +90,7 @@ async def test_no_plan_no_line(sessions):
 async def test_undo_frees_quota(sessions):
     book = QuotaBook(sessions)
     transport = FakeTransport()
-    await set_up(PlanManager(sessions, book, GLOBAL), transport)
+    await set_up(PlanManager(sessions, book, GLOBAL, FakeLLM()), transport)
     logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL, book)
     await log(logger, transport, "lunch 50")
     await logger.undo_last(msg("text", "/undo"), transport)
@@ -101,7 +101,7 @@ async def test_undo_frees_quota(sessions):
 # the assistant tool gets plain numbers and removing the plan clears it
 async def test_status_and_remove(sessions):
     book = QuotaBook(sessions)
-    plans = PlanManager(sessions, book, GLOBAL)
+    plans = PlanManager(sessions, book, GLOBAL, FakeLLM())
     transport = FakeTransport()
     await set_up(plans, transport)
     async with sessions() as session:
@@ -112,3 +112,61 @@ async def test_status_and_remove(sessions):
     assert status["buckets"][2] == savings
     await plans.on_button(msg("button", "plan:remove:yes"), "plan:remove:yes", transport)
     assert (await book.status(user_id))["plan"] is None
+
+
+# a plan typed in words: the model drafts it, python checks and converts the limit
+async def test_own_plan_with_a_limit(sessions):
+    book = QuotaBook(sessions)
+    drafted = CustomPlan(
+        buckets=[
+            BucketDraft(name="Food", cap_cents=40000, cap_per="month",
+                        categories=["Dining", "Groceries"]),
+            BucketDraft(name="Savings", pct=30)
+        ],
+        period="monthly"
+    )
+    plans = PlanManager(sessions, book, GLOBAL, FakeLLM({"custom_plan": drafted}))
+    transport = FakeTransport()
+    await plans.on_button(msg("button", "plan:setup"), "plan:setup", transport)
+    await plans.on_button(msg("button", "plan:more"), "plan:more", transport)
+    await plans.on_button(msg("button", "plan:fw:custom"), "plan:fw:custom", transport)
+    assert plans.waiting_for_text(ME)
+    await plans.on_text(msg("text", "save 30%, food under 400 a month"), transport)
+    await plans.on_text(msg("text", "4500"), transport)
+    confirm = transport.sent_buttons[-1][1]
+    assert "- Food: *USD 400.00*\n- Savings: *USD 1350.00*" in confirm
+    untracked = "transport, shopping, bills, entertainment, health, travel, other"
+    assert f"_Not tracked: {untracked}._" in confirm
+    assert "_Your own plan, drafted with Muse Spark_" in confirm
+    await plans.on_button(msg("button", "plan:save"), "plan:save", transport)
+    logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL, book)
+    lunch = await log(logger, transport, "lunch 50")
+    assert lunch.endswith("*USD 350.00* left in Food this month")
+    assert "left in" not in await log(logger, transport, "uber 20")
+
+
+# two plans that do not add up lead back to the ready-made ones
+async def test_own_plan_refused_twice(sessions):
+    drafted = CustomPlan(
+        buckets=[BucketDraft(name="Savings", pct=70), BucketDraft(name="Fun", pct=50)]
+    )
+    plans = PlanManager(sessions, QuotaBook(sessions), GLOBAL, FakeLLM({"custom_plan": drafted}))
+    transport = FakeTransport()
+    await plans.on_button(msg("button", "plan:setup"), "plan:setup", transport)
+    await plans.on_button(msg("button", "plan:fw:custom"), "plan:fw:custom", transport)
+    await plans.on_text(msg("text", "save 70% and 50% fun"), transport)
+    assert "The shares add up to 120%" in transport.sent_buttons[-1][1]
+    await plans.on_text(msg("text", "save 70% and 50% fun"), transport)
+    assert transport.sent_text[-1][1].startswith("*Let's try a ready-made plan*")
+    assert transport.sent_buttons[-1][1].startswith("*Pick a plan*")
+
+
+# when the model is down the user can retry or pick a ready-made plan
+async def test_own_plan_model_down(sessions):
+    plans = PlanManager(sessions, QuotaBook(sessions), GLOBAL, FakeLLM())
+    transport = FakeTransport()
+    await plans.on_button(msg("button", "plan:setup"), "plan:setup", transport)
+    await plans.on_button(msg("button", "plan:fw:custom"), "plan:fw:custom", transport)
+    await plans.on_text(msg("text", "save half"), transport)
+    assert transport.sent_buttons[-1][1].startswith("*I couldn't read that just now*")
+    assert plans.waiting_for_text(ME)

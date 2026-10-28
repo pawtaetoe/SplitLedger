@@ -45,6 +45,13 @@ def quota_cents(take_home_cents: int, pct: int, period: str) -> int:
     return take_home_cents * pct // 100
 
 
+# a bucket quota from its monthly limit when it has one, else from its share
+def bucket_quota(take_home_cents: int, pct: int, cap_cents: int | None, period: str) -> int:
+    if cap_cents is not None:
+        return cap_cents * 12 // 52 if period == "weekly" else cap_cents
+    return quota_cents(take_home_cents, pct, period)
+
+
 # where one bucket stands this period
 @dataclass(frozen=True)
 class BucketStatus:
@@ -94,7 +101,7 @@ class QuotaBook:
         saving = set(plan.buckets) - set(plan.category_map.values())
         buckets = [
             BucketStatus(
-                name, quota_cents(user.take_home_cents, pct, plan.period),
+                name, bucket_quota(user.take_home_cents, pct, plan.caps.get(name), plan.period),
                 spent.get(name, 0), name in saving
             )
             for name, pct in plan.buckets.items()

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 NEEDS = ("Groceries", "Transport", "Bills", "Health")
 WANTS = ("Dining", "Entertainment", "Shopping", "Travel", "Other")
@@ -13,6 +13,7 @@ class Framework:
     source: str
     buckets: dict[str, int]
     category_map: dict[str, str]
+    caps: dict[str, int] = field(default_factory=dict)
 
     # buckets nothing is spent from, they are targets to keep
     def savings(self) -> list[str]:

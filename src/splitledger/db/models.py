@@ -125,6 +125,7 @@ class BudgetPlan(Base):
     period: Mapped[str] = mapped_column(sa.String)
     buckets: Mapped[dict[str, int]] = mapped_column(JSONB)
     category_map: Mapped[dict[str, str]] = mapped_column(JSONB)
+    caps: Mapped[dict[str, int]] = mapped_column(JSONB, default=dict)
     step_up_pct: Mapped[int | None] = mapped_column(sa.Integer)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()

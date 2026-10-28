@@ -62,6 +62,21 @@ GLOBAL = Locale(
 )
 
 
+# one part of a plan the user described, a share of pay or a money limit
+class BucketDraft(BaseModel):
+    name: str
+    pct: int | None = None
+    cap_cents: int | None = None
+    cap_per: Literal["week", "month"] | None = None
+    categories: list[str] = []
+
+
+# a plan drafted from the user's own words
+class CustomPlan(BaseModel):
+    buckets: list[BucketDraft]
+    period: Literal["weekly", "monthly"] | None = None
+
+
 # smoke test result for the fixture recorder
 class SmokeResult(BaseModel):
     ok: bool

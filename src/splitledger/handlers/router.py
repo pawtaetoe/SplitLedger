@@ -186,5 +186,5 @@ message_router = Router(
     ExpenseLogger(llm, SessionFactory, locale, book),
     MessageReader(llm, locale),
     SpendAssistant(llm, SessionFactory, book),
-    PlanManager(SessionFactory, book, locale)
+    PlanManager(SessionFactory, book, locale, llm)
 )

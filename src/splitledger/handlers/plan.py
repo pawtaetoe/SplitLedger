@@ -1,25 +1,44 @@
+import asyncio
+import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import BudgetPlan, User
 from splitledger.handlers.log import ensure_user, money
-from splitledger.llm.schemas import Locale
+from splitledger.llm.schemas import CustomPlan, Locale
+from splitledger.plans.custom import check_plan, fits_income
 from splitledger.plans.frameworks import PRESETS, SAVE_CHOICES, Framework, pay_yourself_first
-from splitledger.plans.quota import QuotaBook, quota_cents
+from splitledger.plans.quota import QuotaBook, bucket_quota
 
 WELCOME = (
     "*Hi! I keep track of what you spend.*\n"
     "Type what you bought, like _coffee 4.50_.\n"
     "Or send a receipt photo or a voice note."
 )
+LOG = logging.getLogger(__name__)
+PROMPT = (Path(__file__).parents[1] / "llm" / "prompts" / "custom_plan.md").read_text(
+    encoding="utf-8"
+)
+# seconds to wait for the model to draft a plan
+MODEL_TIMEOUT = 15.0
 PICK = "*Pick a plan*\nYou can change it any time."
+MORE = ("plan:more", "More choices — 60% solution, or describe your own")
+OWN = ("plan:fw:custom", "Describe my own — your own split, or limits per category")
+EXAMPLE = "save 30%, food under 400 a month"
+DESCRIBE = (
+    "*Describe your plan*\n"
+    f"For example: _{EXAMPLE}_\n"
+    "or _50/30/20 but save 25%_."
+)
 ASK_INCOME = "*What do you take home a month?*\nAfter tax. Just the number, like _4500_."
 ASK_AGAIN = "*Just the number please*\nLike _4500_."
 CANCEL = ("plan:cancel", "Cancel")
@@ -48,17 +67,21 @@ class Draft:
     framework: Framework | None = None
     take_home_cents: int | None = None
     period: str | None = None
+    notes: list[str] = field(default_factory=list)
+    failures: int = 0
 
 
 # plan set up, display and removal over a few button taps
 class PlanManager:
-    # sessions for saving, the quota book for status and the locale for new users
+    # sessions, the quota book, the locale for new users and the model for own plans
     def __init__(
-        self, sessions: async_sessionmaker[AsyncSession], book: QuotaBook, locale: Locale
+        self, sessions: async_sessionmaker[AsyncSession], book: QuotaBook, locale: Locale,
+        llm: LLM
     ) -> None:
         self._sessions = sessions
         self._book = book
         self._locale = locale
+        self._llm = llm
         self._drafts: dict[str, Draft] = {}
 
     # greet someone the first time they ever message
@@ -71,10 +94,10 @@ class PlanManager:
                 inbound.user_id, WELCOME, [("plan:setup", "Set up a plan")]
             )
 
-    # true while we are waiting for the income reply
+    # true while we are waiting for a typed plan or income reply
     def waiting_for_text(self, wa_user_id: str) -> bool:
         draft = self._drafts.get(wa_user_id)
-        return draft is not None and draft.step == "income"
+        return draft is not None and draft.step in ("describe", "income")
 
     # show the current plan, or start set up when there is none
     async def show(self, inbound: Inbound, transport: Transport) -> None:
@@ -101,7 +124,9 @@ class PlanManager:
     async def start(self, inbound: Inbound, transport: Transport) -> None:
         self._drafts[inbound.user_id] = Draft("framework")
         buttons = [(f"plan:fw:{f.key}", f"{f.name} — {f.blurb}") for f in PRESETS.values()]
-        await transport.send_buttons(inbound.user_id, PICK, buttons)
+        # three real buttons at most, so the rest sit behind more choices
+        first = [b for b in buttons if b[0] != "plan:fw:60"]
+        await transport.send_buttons(inbound.user_id, PICK, [*first, MORE])
 
     # every plan button moves the set up one step
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
@@ -128,9 +153,12 @@ class PlanManager:
             return
         await self._step(inbound, action, draft, transport)
 
-    # the income reply
+    # a typed plan or the income reply
     async def on_text(self, inbound: Inbound, transport: Transport) -> None:
         draft = self._drafts[inbound.user_id]
+        if draft.step == "describe":
+            await self._describe(inbound, draft, transport)
+            return
         cents = parse_income(inbound.text or "")
         if cents is None:
             await transport.send_buttons(inbound.user_id, ASK_AGAIN, [CANCEL])
@@ -143,6 +171,15 @@ class PlanManager:
         self, inbound: Inbound, action: str, draft: Draft, transport: Transport
     ) -> None:
         user = inbound.user_id
+        if action == "more":
+            sixty = PRESETS["60"]
+            buttons = [(f"plan:fw:{sixty.key}", f"{sixty.name} — {sixty.blurb}"), OWN]
+            await transport.send_buttons(user, "*More choices*", [*buttons, ("plan:setup", "Back")])
+            return
+        if action == "fw:custom":
+            draft.step = "describe"
+            await transport.send_buttons(user, DESCRIBE, [CANCEL])
+            return
         if action.startswith("fw:") and action.removeprefix("fw:") in PRESETS:
             draft.framework = PRESETS[action.removeprefix("fw:")]
             if draft.framework.key == "pyf":
@@ -182,8 +219,47 @@ class PlanManager:
             buttons = [("plan:keep", f"Keep {money(known, currency)}"), CANCEL]
         await transport.send_buttons(inbound.user_id, ASK_INCOME, buttons)
 
-    # weekly or monthly
+    # the model drafts a plan from words, python checks it before anything is saved
+    async def _describe(self, inbound: Inbound, draft: Draft, transport: Transport) -> None:
+        user = inbound.user_id
+        prompt = f"custom_plan: {PROMPT}{inbound.text or ''}"
+        try:
+            plan = await asyncio.wait_for(
+                self._llm.structured(prompt, CustomPlan), MODEL_TIMEOUT
+            )
+        except Exception as error:
+            LOG.warning("plan model failed with %s", type(error).__name__)
+            text = "*I couldn't read that just now*\nTry again, or pick a ready-made plan."
+            await transport.send_buttons(user, text, [("plan:setup", "Ready-made plans"), CANCEL])
+            return
+        checked = check_plan(plan)
+        if checked.framework is None:
+            await self._refuse(inbound, draft, checked.problem or "", transport)
+            return
+        draft.framework = checked.framework
+        draft.notes = checked.notes
+        draft.period = plan.period
+        await self._ask_income(inbound, draft, transport)
+
+    # say what is wrong, and after two misses offer the ready-made plans
+    async def _refuse(
+        self, inbound: Inbound, draft: Draft, problem: str, transport: Transport
+    ) -> None:
+        draft.failures += 1
+        draft.step = "describe"
+        if draft.failures >= 2:
+            text = f"*Let's try a ready-made plan*\n{problem}"
+            await transport.send_text(inbound.user_id, text)
+            await self.start(inbound, transport)
+            return
+        text = f"*That plan doesn't work yet*\n{problem}\nTry again, like _{EXAMPLE}_."
+        await transport.send_buttons(inbound.user_id, text, [CANCEL])
+
+    # weekly or monthly, skipped when the plan already says
     async def _ask_period(self, inbound: Inbound, draft: Draft, transport: Transport) -> None:
+        if draft.period is not None:
+            await self._confirm(inbound, draft, transport)
+            return
         draft.step = "period"
         text = "*Check it every week or every month?*"
         buttons = [("plan:weekly", "Weekly"), ("plan:monthly", "Monthly"), CANCEL]
@@ -194,19 +270,28 @@ class PlanManager:
         if draft.framework is None or not draft.take_home_cents or draft.period is None:
             await self.start(inbound, transport)
             return
+        framework = draft.framework
+        if not fits_income(framework, draft.take_home_cents):
+            problem = "Your shares and limits add up to more than you take home."
+            await self._refuse(inbound, draft, problem, transport)
+            return
         draft.step = "confirm"
         currency = await self._currency(inbound.user_id)
         unit = "week" if draft.period == "weekly" else "month"
-        shares = [
-            f"- {name}: *{money(quota_cents(draft.take_home_cents, pct, draft.period), currency)}*"
-            for name, pct in draft.framework.buckets.items()
-        ]
+        shares = []
+        for name, pct in framework.buckets.items():
+            quota = bucket_quota(draft.take_home_cents, pct, framework.caps.get(name), draft.period)
+            shares.append(f"- {name}: *{money(quota, currency)}*")
+        credit = f"_Based on {framework.source}_" if framework.source else (
+            "_Your own plan, drafted with Muse Spark_"
+        )
         lines = [
-            f"*{draft.framework.name}*",
+            f"*{framework.name}*",
             f"On {money(draft.take_home_cents, currency)} a month, each {unit}:",
             *shares,
             "",
-            f"_Based on {draft.framework.source}_"
+            *[f"_{note}_" for note in draft.notes],
+            credit
         ]
         if draft.framework.key == "pyf":
             lines.append("_Tip: each time you get a raise, save 1% more._")
@@ -224,6 +309,7 @@ class PlanManager:
             "period": draft.period,
             "buckets": framework.buckets,
             "category_map": framework.category_map,
+            "caps": framework.caps,
             "step_up_pct": 1 if framework.key == "pyf" else None
         }
         async with self._sessions() as session:
