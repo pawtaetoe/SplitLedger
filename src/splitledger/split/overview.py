@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.db import models
@@ -198,20 +198,28 @@ class Overview:
             user, owed, owe, paid, joined, month, report, coming, due, recent, abroad, parts
         )
 
-    # owed or owing totals by the other person, guests named from the row note
+    # owed or owing totals by the other person less what was paid, guests named from the note
     async def _balances(
         self, session: AsyncSession, user_id: uuid.UUID, kind: LedgerKind
     ) -> list[Balance]:
         who = func.coalesce(User.display_name, LedgerEntry.note, "a friend")
+        settled = LedgerEntry.kind == LedgerKind.SETTLEMENT
+        cents = func.sum(
+            case((settled, -func.abs(LedgerEntry.amount_cents)), else_=LedgerEntry.amount_cents)
+        )
+        side = LedgerEntry.amount_cents > 0 if kind == LedgerKind.RECEIVABLE else (
+            LedgerEntry.amount_cents < 0
+        )
         query = (
-            select(who, LedgerEntry.currency, func.sum(LedgerEntry.amount_cents))
+            select(who, LedgerEntry.currency, cents)
             .join(User, LedgerEntry.counterparty_id == User.id, isouter=True)
             .where(
-                LedgerEntry.user_id == user_id, LedgerEntry.kind == kind,
-                LedgerEntry.voided_at.is_(None)
+                LedgerEntry.user_id == user_id, LedgerEntry.voided_at.is_(None),
+                or_(LedgerEntry.kind == kind, and_(settled, side))
             )
             .group_by(who, LedgerEntry.currency)
-            .order_by(func.sum(LedgerEntry.amount_cents).desc())
+            .having(cents != 0)
+            .order_by(cents.desc())
         )
         rows = (await session.execute(query)).all()
         return [Balance(str(name), int(cents), currency) for name, currency, cents in rows]

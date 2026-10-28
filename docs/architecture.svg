@@ -37,14 +37,14 @@
 
   <rect class="core" x="790" y="40" width="150" height="250"/>
   <text class="h" x="806" y="68">Handlers</text>
-  <text class="t" x="806" y="94">log and undo</text>
-  <text class="t" x="806" y="116">voice and receipts</text>
-  <text class="t" x="806" y="138">ask with tools</text>
-  <text class="t" x="806" y="160">budget plans</text>
-  <text class="t" x="806" y="182">can I afford it</text>
-  <text class="t" x="806" y="204">upcoming bills</text>
-  <text class="t" x="806" y="226">group bill</text>
-  <text class="t" x="806" y="248">claim by numbers</text>
+  <text class="t" x="806" y="94">log, voice, receipts</text>
+  <text class="t" x="806" y="116">ask with tools</text>
+  <text class="t" x="806" y="138">budget plans</text>
+  <text class="t" x="806" y="160">can I afford it</text>
+  <text class="t" x="806" y="182">upcoming bills</text>
+  <text class="t" x="806" y="204">group bill</text>
+  <text class="t" x="806" y="226">claim by numbers</text>
+  <text class="t" x="806" y="248">PayNow and I've paid</text>
   <text class="t" x="806" y="270">dashboard link</text>
 
   <rect class="meta" x="410" y="180" width="345" height="100"/>

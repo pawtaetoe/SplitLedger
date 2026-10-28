@@ -17,9 +17,12 @@ from splitledger.handlers.claim import ClaimChat
 from splitledger.handlers.dashboard import LINK_MINUTES, DashboardLink
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.plan import PlanManager
+from splitledger.handlers.settle import SettleUp
 from splitledger.llm.client import MetaLLM
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, Locale, MessageResult
 from splitledger.llm.schemas_sg import SG
+from splitledger.pay.rails import PayRails, Rail
+from splitledger.pay.rails_sg import PayNow
 from splitledger.plans.afford import CORE_RULES
 from splitledger.plans.afford_sg import SG_RULES
 from splitledger.plans.quota import QuotaBook
@@ -32,6 +35,7 @@ LOG = logging.getLogger(__name__)
 # add a region with a new schemas module and list it here
 LOCALES = {"global": GLOBAL, "sg": SG}
 AFFORD_RULES = {"global": CORE_RULES, "sg": [*CORE_RULES, *SG_RULES]}
+RAILS: dict[str, tuple[Rail, ...]] = {"global": (), "sg": (PayNow(),)}
 PROMPTS = Path(__file__).parents[1] / "llm" / "prompts"
 PROMPT = "".join(
     (PROMPTS / name).read_text(encoding="utf-8") for name in ("classify.md", "parse_expense.md")
@@ -194,7 +198,7 @@ class Router:
         if button_id == "owe:all":
             await self._assistant.owed(inbound, transport)
             return
-        if button_id.startswith("bill:"):
+        if button_id.startswith(("bill:", "pay:")):
             await self._group.on_button(inbound, button_id, transport)
             return
         if button_id.startswith("claim:"):
@@ -317,7 +321,7 @@ bills = UpcomingBills(SessionFactory, logger, settings.remind_hour)
 bot_number = settings.whatsapp_bot_number or re.sub(r"\D", "", settings.twilio_whatsapp_from)
 group = GroupBills(
     SessionFactory, logger, locale, ClaimTokens(settings.app_secret), settings.public_base_url,
-    bot_number
+    bot_number, SettleUp(SessionFactory, PayRails(RAILS[settings.locale]))
 )
 links = DashboardLink(
     SessionFactory, LoginLinks(ClaimTokens(settings.app_secret), LINK_MINUTES * 60),

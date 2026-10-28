@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.contracts.money import Cents
@@ -108,6 +108,15 @@ async def post_late(session: AsyncSession, bill: Bill, person: Participant) -> N
     )).scalar_one_or_none()
     session.add_all(friend_rows(bill, person, allocation.amount_cents, payer or "the payer"))
     allocation.posted_at = datetime.now(UTC)
+    # the payer's row now knows who this is, so paying it back clears it
+    await session.execute(
+        update(models.LedgerEntry).where(
+            models.LedgerEntry.bill_id == bill.id, models.LedgerEntry.user_id == bill.payer_id,
+            models.LedgerEntry.kind == models.LedgerKind.RECEIVABLE,
+            models.LedgerEntry.counterparty_id.is_(None),
+            models.LedgerEntry.note == person.guest_name
+        ).values(counterparty_id=person.user_id)
+    )
 
 
 # closes a bill once: shares, allocations and every ledger row in one transaction

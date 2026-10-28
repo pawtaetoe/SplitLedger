@@ -13,6 +13,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import Bill, BillItem, BillStatus, ItemClaim, Participant, User
 from splitledger.handlers.log import ExpenseLogger, ensure_user, money, receipt_adds_up
+from splitledger.handlers.settle import OWE_ALL, SettleUp
 from splitledger.llm.schemas import Locale, ReceiptDraft
 from splitledger.split.finalise import BillCloser, Closing, Leftovers
 from splitledger.split.tokens import ClaimTokens
@@ -62,7 +63,6 @@ NOTHING_OPEN = (
 LEFTOVER_ASK = "*Nobody claimed {}*\nWho pays for {}?"
 SHORT_ASK = "*Only {} of {} people have joined*\nClose anyway? You cover the rest."
 OWED_TO_FRIEND = "*You owe {} {}*\nFor {}. Logged as your {} expense."
-OWE_ALL = ("owe:all", "Everything I owe")
 AUTO_CLOSED = "Everyone has claimed, so I closed it."
 ALL_IN = (
     "*Everyone's in · {}*\n"
@@ -154,7 +154,7 @@ class GroupBills:
     # sessions, the logger that reads receipts, signed links and where they point
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], logger: ExpenseLogger, locale: Locale,
-        tokens: ClaimTokens, base_url: str, bot_number: str
+        tokens: ClaimTokens, base_url: str, bot_number: str, settle: SettleUp | None = None
     ) -> None:
         self._sessions = sessions
         self._logger = logger
@@ -163,6 +163,7 @@ class GroupBills:
         self._base_url = base_url.rstrip("/")
         self._bot_number = bot_number
         self._closer = BillCloser(sessions)
+        self._settle = settle
 
     # read the photo, check it can be split, save the bill and send the forwardable message
     # unsure saves the bill and asks how to split it before anything goes to friends
@@ -240,6 +241,10 @@ class GroupBills:
 
     # close by button: the first tap, then leftovers or a short even split answered
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
+        if button_id.startswith("pay:"):
+            if self._settle is not None:
+                await self._settle.on_button(inbound, button_id, transport)
+            return
         parts = button_id.split(":")
         if len(parts) < 3:
             return
@@ -469,6 +474,7 @@ class GroupBills:
                 )).scalars()
             }
         what = bill.vendor or "a shared bill"
+        payer = users.get(bill.payer_id)
         for share in closing.shares:
             user = users.get(share.person.user_id) if share.person.user_id else None
             if user is None or share.person.id == closing.payer.id or not share.cents:
@@ -476,7 +482,11 @@ class GroupBills:
             amount = money(share.cents, c)
             text = OWED_TO_FRIEND.format(closing.payer.guest_name, amount, what, category)
             try:
-                await transport.send_buttons(user.wa_user_id, text, [OWE_ALL])
+                if self._settle is not None and payer is not None:
+                    reference = f"SplitLedger {bill.code}"
+                    await self._settle.ask(transport, user, payer, c, text, share.cents, reference)
+                else:
+                    await transport.send_buttons(user.wa_user_id, text, [OWE_ALL])
             except Exception as error:
                 LOG.warning("owed message failed with %s", type(error).__name__)
 

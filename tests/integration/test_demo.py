@@ -13,8 +13,11 @@ from splitledger.handlers.dashboard import DashboardLink
 from splitledger.handlers.log import ExpenseLogger
 from splitledger.handlers.plan import PlanManager
 from splitledger.handlers.router import PROMPT, MessageReader, Router
+from splitledger.handlers.settle import SettleUp, paid_button
 from splitledger.llm.schemas import ExpenseDraft, MessageResult, ReceiptDraft, ReceiptItem
 from splitledger.llm.schemas_sg import SG
+from splitledger.pay.rails import PayRails
+from splitledger.pay.rails_sg import PayNow
 from splitledger.plans.afford import CORE_RULES
 from splitledger.plans.quota import QuotaBook
 from splitledger.split.claims import ClaimBook
@@ -54,7 +57,8 @@ def app(sessions) -> tuple[Router, GroupBills, Overview]:
     book = QuotaBook(sessions)
     logger = ExpenseLogger(llm, sessions, SG, book)
     links = DashboardLink(sessions, LoginLinks(TOKENS, 900), "https://sl.test", SG)
-    group = GroupBills(sessions, logger, SG, TOKENS, "https://sl.test", "6512345678")
+    settle = SettleUp(sessions, PayRails((PayNow(),)))
+    group = GroupBills(sessions, logger, SG, TOKENS, "https://sl.test", "6512345678", settle)
     router = Router(
         logger, MessageReader(llm, SG), SpendAssistant(llm, sessions, book, CORE_RULES),
         PlanManager(sessions, book, SG, llm), UpcomingBills(sessions, logger, 9), group,
@@ -114,10 +118,19 @@ async def test_demo(sessions):
     closed = last(transport, TOMMY)
     assert "- Anna *SGD 10.00*" in closed and "- Ben *SGD 20.00*" in closed
     assert last(transport, ANNA).startswith("*You owe Tommy SGD 10.00*")
+    assert "*PayNow* to 8123 4567" in last(transport, ANNA)
+    assert any(to == ANNA for to, _, _ in transport.sent_images)
 
     # 6, the button under you owe lists everything without the model
     await router.handle(Inbound("m-owe", ANNA, "button", button_id="owe:all"), transport)
     assert last(transport, ANNA) == "*You owe*\n- Tommy *SGD 10.00*"
+
+    # 6b, anna pays by paynow and taps i've paid, tommy is told
+    async with sessions() as session:
+        tommy = (await session.execute(select(User).where(User.wa_user_id == TOMMY))).scalar_one()
+    done = paid_button(tommy.id, "SGD")[0]
+    await router.handle(Inbound("m-paid", ANNA, "button", button_id=done), transport)
+    assert last(transport, TOMMY).startswith("*Anna paid you SGD 10.00*")
 
     # 7, the ledger and the dashboard agree
     async with sessions() as session:
@@ -129,10 +142,11 @@ async def test_demo(sessions):
         )).all()
     assert stored is not None and stored.status == BillStatus.FINALISED
     assert sorted(rows) == sorted([
-        (LedgerKind.EXPENSE, 6000), (LedgerKind.RECEIVABLE, 1000), (LedgerKind.RECEIVABLE, 2000)
+        (LedgerKind.EXPENSE, 6000), (LedgerKind.RECEIVABLE, 1000), (LedgerKind.RECEIVABLE, 2000),
+        (LedgerKind.SETTLEMENT, 1000)
     ])
     board = await overview.build(tommy.id)
     assert board is not None
-    assert [(b.who, b.cents) for b in board.people()] == [("Ben", 2000), ("Anna", 1000)]
+    assert [(b.who, b.cents) for b in board.people()] == [("Ben", 2000)]
     assert board.month == [("Dining", 6000)]
     assert ZoneInfo(board.user.timezone).key == "Asia/Singapore"

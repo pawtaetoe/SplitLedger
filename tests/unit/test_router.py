@@ -278,6 +278,14 @@ async def test_close_routes():
     assert group.calls == ["button bill:close:K7Q2AB", "close"]
 
 
+# i've paid and not received reach the group bill handler too
+async def test_pay_routes():
+    group = fakes.FakeGroup()
+    router = build(FakeLLM(), group=group)
+    await router.handle(button("pay:done:x:SGD"), FakeTransport())
+    assert group.calls == ["button pay:done:x:SGD"]
+
+
 # a caption saying who had what is read as claims on the bill it just made
 async def test_caption_claims_after_split():
     group = fakes.FakeGroup()
