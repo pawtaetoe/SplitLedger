@@ -1,0 +1,41 @@
+# render blueprint, one always on web service and one postgres database
+services:
+  - type: web
+    name: splitledger
+    runtime: docker
+    # starter stays awake, the free plan sleeps and would miss whatsapp messages
+    plan: starter
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: splitledger-db
+          property: connectionString
+      - key: ENV
+        value: prod
+      - key: LOCALE
+        value: sg
+      - key: WHATSAPP_PROVIDER
+        value: twilio
+      - key: APP_SECRET
+        generateValue: true
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: META_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: EXCHANGE_RATE_API_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+
+databases:
+  - name: splitledger-db
+    # the free database lasts 30 days, enough for judging, upgrade to keep it after
+    plan: free

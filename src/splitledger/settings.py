@@ -1,5 +1,7 @@
+import re
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +30,12 @@ class Settings(BaseSettings):
     exchange_rate_api_key: str = ""
     # local hour from which bill reminders go out
     remind_hour: int = 9
+
+    # hosts hand out postgres urls, the app reaches postgres through asyncpg
+    @field_validator("database_url")
+    @classmethod
+    def async_driver(cls, url: str) -> str:
+        return re.sub(r"^postgres(?:ql)?://", "postgresql+asyncpg://", url)
 
 
 settings = Settings()
