@@ -5,9 +5,10 @@ import pytest
 import splitledger.handlers.router as router_module
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerSource
-from splitledger.handlers.router import HELP, HINTS, MENU, SOON, UNCLEAR, MessageReader, Router
+from splitledger.handlers.router import HELP, SOON, UNCLEAR, MessageReader, Router
 from splitledger.llm.schemas import ExpenseDraft, MessageResult
 from splitledger.llm.schemas_sg import SG
+from tests import fakes
 from tests.fakes import FakeAssistant, FakeBills, FakeLLM, FakeLogger, FakePlans, FakeTransport
 
 USER = "6581234567"
@@ -39,12 +40,24 @@ def said(intent: str, cents: int | None = None) -> MessageResult:
     return MessageResult(intent=intent, expense=expense)
 
 
-# name the handler a message reached from the assistant, reply text or fake logger
-def landed(logger: FakeLogger, transport: FakeTransport, assistant: FakeAssistant) -> str:
+# a router with fakes for every handler not given
+def build(llm: FakeLLM, logger=None, assistant=None, plans=None, bills=None, group=None) -> Router:
+    return Router(
+        logger or FakeLogger(), MessageReader(llm, SG), assistant or FakeAssistant(),
+        plans or FakePlans(), bills or FakeBills(), group or fakes.FakeGroup()
+    )
+
+
+# name the handler a message reached from the fakes or the reply text
+def landed(
+    logger: FakeLogger, transport: FakeTransport, assistant: FakeAssistant, group: fakes.FakeGroup
+) -> str:
     if assistant.asked:
         return "ask"
     replies = [reply for _, reply in transport.sent_text]
     replies += [reply for _, reply, _ in transport.sent_buttons]
+    if group.calls or router_module.SPLIT_HINT in replies:
+        return "split"
     if HELP in replies:
         return "help"
     if UNCLEAR in replies:
@@ -64,9 +77,9 @@ async def route(
     logger = FakeLogger()
     transport = FakeTransport()
     assistant = FakeAssistant()
-    router = Router(logger, MessageReader(llm, SG), assistant, FakePlans(), FakeBills())
-    await router.handle(inbound, transport)
-    return landed(logger, transport, assistant), logger, llm
+    group = fakes.FakeGroup()
+    await build(llm, logger, assistant, group=group).handle(inbound, transport)
+    return landed(logger, transport, assistant, group), logger, llm
 
 
 # bot formats are handled by rule and never reach the model
@@ -106,6 +119,8 @@ MODEL_ROWS = [
     (text("hello"), said("chat"), "help"),
     (text("asdfgh"), said("unclear"), "unclear"),
     (image("split this with the team"), said("split"), "split"),
+    (text("split the overall charge evenly among 4 pax"), MessageResult(intent="split", ways=4),
+     "split"),
     (image("lunch"), said("log", 1500), "log_receipt")
 ]
 
@@ -128,7 +143,7 @@ async def test_voice_goes_through_reader():
     llm = FakeLLM({"read_message": said("log", 4500)})
     logger = FakeLogger()
     logger.heard = "spent 45 on petrol"
-    router = Router(logger, MessageReader(llm, SG), FakeAssistant(), FakePlans(), FakeBills())
+    router = build(llm, logger)
     await router.handle(audio("note-1"), FakeTransport())
     assert logger.calls == ["transcribe", "log"]
     assert logger.drafts[0][1] == LedgerSource.VOICE
@@ -140,7 +155,7 @@ async def test_spoken_question_is_not_logged():
     logger = FakeLogger()
     logger.heard = "how much did I spend this week"
     assistant = FakeAssistant()
-    router = Router(logger, MessageReader(llm, SG), assistant, FakePlans(), FakeBills())
+    router = build(llm, logger, assistant)
     await router.handle(audio("note-1"), FakeTransport())
     assert assistant.asked == ["how much did I spend this week"]
 
@@ -179,7 +194,7 @@ async def test_slow_model_falls_back(monkeypatch):
 async def test_plan_routes():
     plans = FakePlans()
     llm = FakeLLM({"read_message": said("plan")})
-    router = Router(FakeLogger(), MessageReader(llm, SG), FakeAssistant(), plans, FakeBills())
+    router = build(llm, plans=plans)
     transport = FakeTransport()
     await router.handle(button("plan:fw:503020"), transport)
     await router.handle(text("/plan"), transport)
@@ -197,7 +212,7 @@ async def test_plan_routes():
 # bills buttons and the bills menu choice reach the bills handler
 async def test_bills_routes():
     bills = FakeBills()
-    router = Router(FakeLogger(), MessageReader(FakeLLM(), SG), FakeAssistant(), FakePlans(), bills)
+    router = build(FakeLLM(), bills=bills)
     await router.handle(button("bills:remind:abc"), FakeTransport())
     await router.handle(button("menu:bills"), FakeTransport())
     assert bills.calls == ["button bills:remind:abc", "show"]
@@ -207,14 +222,32 @@ async def test_bills_routes():
 async def test_menu_choices():
     logger = FakeLogger()
     plans = FakePlans()
-    router = Router(logger, MessageReader(FakeLLM(), SG), FakeAssistant(), plans, FakeBills())
+    router = build(FakeLLM(), logger, plans=plans)
     transport = FakeTransport()
     await router.handle(text("/help"), transport)
-    assert transport.sent_buttons[-1] == (USER, HELP, MENU)
+    assert transport.sent_buttons[-1] == (USER, HELP, router_module.MENU)
     await router.handle(button("menu:log"), transport)
-    assert transport.sent_text[-1][1] == HINTS["menu:log"]
+    assert transport.sent_text[-1][1] == router_module.HINTS["menu:log"]
     await router.handle(button("menu:plan"), transport)
     await router.handle(button("menu:undo"), transport)
     assert "show" in plans.calls and logger.calls[-1] == "undo_last"
     await router.handle(button("menu:open"), transport)
-    assert transport.sent_buttons[-1][2] == MENU
+    assert transport.sent_buttons[-1][2] == router_module.MENU
+
+
+# a head count turns a split into an even split, by photo caption or by message after it
+async def test_even_split_routes():
+    group = fakes.FakeGroup()
+    llm = FakeLLM({"read_message": MessageResult(intent="split", ways=4)})
+    router = build(llm, group=group)
+    await router.handle(image("split 4 ways"), FakeTransport())
+    await router.handle(text("split it evenly among 4 pax"), FakeTransport())
+    assert group.calls == ["split 4", "even 4"]
+
+
+# the rules find a head count when the model is down
+def test_rules_read_ways():
+    reader = MessageReader(FakeLLM(), SG)
+    assert reader.by_rules("split this 3 ways").ways == 3
+    assert reader.by_rules("split among 5 pax").ways == 5
+    assert reader.by_rules("split this").ways is None

@@ -19,6 +19,8 @@ async def test_labelled_message(row):
         pytest.skip("not recorded yet, run make record-fixtures")
     result = await MetaLLM(fixtures_dir=FIXTURES / "llm").structured(prompt, MessageResult)
     assert result.intent == row["intent"]
+    if "ways" in row:
+        assert result.ways == row["ways"]
     if "amount_cents" in row:
         assert result.expense is not None
         assert result.expense.amount_cents == row["amount_cents"]

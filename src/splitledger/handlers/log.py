@@ -153,11 +153,7 @@ class ExpenseLogger:
                 inbound.user_id, "*Already logged*\nThis receipt is saved already."
             )
             return
-        # the same photo is never sent to the model twice
-        receipt = self._receipts.get(key)
-        if receipt is None:
-            receipt = await self._llm.structured(RECEIPT_PROMPT, ReceiptDraft, images=[image])
-            self._receipts[key] = receipt
+        receipt = await self.read_receipt(image)
         total = receipt.total_cents
         if total is None or total <= 0:
             await transport.send_text(
@@ -175,6 +171,15 @@ class ExpenseLogger:
             )
             return
         await self._save_receipt(inbound, transport, key)
+
+    # the receipt in a photo, the same photo is never sent to the model twice
+    async def read_receipt(self, image: bytes) -> ReceiptDraft:
+        key = hashlib.sha256(image).hexdigest()
+        receipt = self._receipts.get(key)
+        if receipt is None:
+            receipt = await self._llm.structured(RECEIPT_PROMPT, ReceiptDraft, images=[image])
+            self._receipts[key] = receipt
+        return receipt
 
     # save a receipt the user confirmed
     async def confirm_receipt(self, inbound: Inbound, key: str, transport: Transport) -> None:

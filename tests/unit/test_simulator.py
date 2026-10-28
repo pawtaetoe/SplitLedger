@@ -4,13 +4,15 @@ from splitledger.channels.simulator import simulator
 from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL
 from splitledger.main import app
-from tests.fakes import FakeAssistant, FakeBills, FakeLLM, FakeLogger, FakePlans
+from tests.fakes import FakeAssistant, FakeBills, FakeGroup, FakeLLM, FakeLogger, FakePlans
 
 
 # posting text reaches the router and replies through transport
 def test_simulator_text_echo(monkeypatch):
     reader = MessageReader(FakeLLM(), GLOBAL)
-    router = Router(FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills())
+    router = Router(
+        FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills(), FakeGroup()
+    )
     monkeypatch.setattr(simulator, "router", router)
     simulator.reset()
     client = TestClient(app)
@@ -33,7 +35,9 @@ def test_simulator_page_served():
 # posting an image reaches the router and the same bytes come back
 def test_simulator_image_echo(monkeypatch):
     reader = MessageReader(FakeLLM(), GLOBAL)
-    router = Router(FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills())
+    router = Router(
+        FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills(), FakeGroup()
+    )
     monkeypatch.setattr(simulator, "router", router)
     simulator.reset()
     client = TestClient(app)

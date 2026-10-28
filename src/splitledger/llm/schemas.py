@@ -116,3 +116,5 @@ class ExpenseDraft(BaseModel):
 class MessageResult(BaseModel):
     intent: Literal["log", "ask", "upcoming", "plan", "split", "claim", "chat", "unclear"]
     expense: ExpenseDraft | None = None
+    # people sharing evenly when a split says how many
+    ways: int | None = None

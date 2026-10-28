@@ -166,6 +166,10 @@ class Bill(Base):
     code: Mapped[str] = mapped_column(sa.String(6), unique=True, index=True)
     payer_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
     vendor: Mapped[str | None] = mapped_column(sa.String)
+    currency: Mapped[str] = mapped_column(sa.String)
+    category: Mapped[str | None] = mapped_column(sa.String)
+    # people sharing the total evenly, none when friends claim items
+    even_ways: Mapped[int | None] = mapped_column(sa.Integer)
     subtotal: Mapped[int] = mapped_column(sa.BigInteger, default=0)
     service: Mapped[int] = mapped_column(sa.BigInteger, default=0)
     tax: Mapped[int] = mapped_column(sa.BigInteger, default=0)

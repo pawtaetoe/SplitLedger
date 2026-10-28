@@ -1,0 +1,62 @@
+{% set bill = view.bill %}
+<h1>{{ bill.vendor or "Bill" }} · {{ money(bill.total, bill.currency) }}</h1>
+{% if bill.even_ways %}
+<p class="sub">Split evenly {{ bill.even_ways }} ways</p>
+{% else %}
+<p class="sub">Tap what you had. Shared a dish? Tap Share it.</p>
+{% endif %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+{% if view.me is none %}
+<section aria-labelledby="who">
+  <h2 id="who">Who are you?</h2>
+  {% if view.people %}
+  <div class="actions">
+    {% for person in view.people %}
+    <form method="post" action="/c/{{ token }}/join">
+      <input type="hidden" name="name" value="{{ person.guest_name }}">
+      <button type="submit">I'm {{ person.guest_name }}</button>
+    </form>
+    {% endfor %}
+  </div>
+  <p class="note">Not listed? Type your name.</p>
+  {% endif %}
+  <form method="post" action="/c/{{ token }}/join">
+    <label for="name">Your name</label>
+    <input id="name" name="name" type="text" maxlength="40" autocomplete="given-name" required>
+    <button type="submit" class="on">Continue</button>
+  </form>
+</section>
+{% elif bill.even_ways %}
+<p>You're in, {{ view.me.guest_name }}.</p>
+<p class="note">{{ view.people|length }} of {{ bill.even_ways }} people have joined.</p>
+{% else %}
+<ul>
+  {% for line in view.lines %}
+  <li>
+    <div class="row">
+      <span>{{ line.name }}{% if line.qty > 1 %} x{{ line.qty }}{% endif %}</span>
+      <span>{{ money(line.price, bill.currency) }}</span>
+    </div>
+    <p class="who">{% if line.holders %}{{ line.holders|join(", ") }}{% else %}Nobody yet{% endif %}</p>
+    <form method="post" action="/c/{{ token }}/claim" hx-post="/c/{{ token }}/claim" hx-target="#bill" class="actions">
+      <input type="hidden" name="item" value="{{ line.id }}">
+      {% if line.mine %}
+      <button type="submit" name="action" value="drop" class="on" aria-label="Remove {{ line.name }} from mine">{% if line.holders|length > 1 %}Sharing, tap to leave{% else %}Mine, tap to undo{% endif %}</button>
+      {% elif line.holders %}
+      <button type="submit" name="action" value="share" aria-label="Share {{ line.name }}">Share it</button>
+      {% else %}
+      <button type="submit" name="action" value="mine" aria-label="I had {{ line.name }}">I had this</button>
+      {% endif %}
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if view.me is not none %}
+<div class="total" aria-live="polite">
+  Your share so far<br><strong>{{ money(view.share, bill.currency) }}</strong>
+  {% if not bill.even_ways %}<br><span class="note" style="color:#dcefe6">Includes your part of service and tax. {{ view.unclaimed }} item{{ "" if view.unclaimed == 1 else "s" }} still unclaimed.</span>{% endif %}
+</div>
+{% endif %}

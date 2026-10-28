@@ -10,6 +10,7 @@ from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerSource
 from splitledger.db.session import SessionFactory
 from splitledger.handlers.ask import SpendAssistant
+from splitledger.handlers.bill import GroupBills
 from splitledger.handlers.bills import UpcomingBills
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.plan import PlanManager
@@ -20,6 +21,7 @@ from splitledger.plans.afford import CORE_RULES
 from splitledger.plans.afford_sg import SG_RULES
 from splitledger.plans.quota import QuotaBook
 from splitledger.settings import settings
+from splitledger.split.tokens import ClaimTokens
 
 LOG = logging.getLogger(__name__)
 # add a region with a new schemas module and list it here
@@ -37,6 +39,8 @@ QUESTION_WORDS = frozenset(
     {"how", "what", "when", "where", "which", "who", "why", "am", "is", "are", "did", "do",
      "does", "show", "list"}
 )
+# a head count in a split like 4 ways or 4 pax
+WAYS = re.compile(r"\b(\d{1,2})\s*(?:ways?|pax|people|persons?)\b", re.IGNORECASE)
 # words that mark a bill they expect rather than one they paid
 REPEAT_WORDS = frozenset({"every", "monthly", "weekly", "yearly", "upcoming"})
 HELP = "*What would you like to do?*\nTap one below."
@@ -45,11 +49,17 @@ UNCLEAR = "*Sorry, I didn't catch that*\nTap one below, or type something like _
 MENU = [
     ("menu:log", "Log spending — type it, or send a photo or voice note"),
     ("menu:ask", "Ask about my spending — totals, top buys, can I afford it"),
+    ("menu:split", "Split a bill — share a receipt with friends"),
     ("menu:bills", "Upcoming bills — see, add or get reminders"),
     ("menu:plan", "Budget plan — set one up or see how you're doing"),
     ("menu:undo", "Undo last entry — remove what you just saved")
 ]
+SPLIT_HINT = (
+    "*Split a bill*\nSend the receipt photo with the caption _split_ to share by item,\n"
+    "or _split 4 ways_ to share it evenly. I'll make a message to forward to your group."
+)
 HINTS = {
+    "menu:split": SPLIT_HINT,
     "menu:log": "*Log spending*\nType what you bought, like _coffee 4.50_.\n"
                 "Or send a receipt photo or a voice note.",
     "menu:ask": "*Ask in your own words*\n- _how much on food this month?_\n"
@@ -59,7 +69,6 @@ HINTS = {
 MENU_WORDS = frozenset({"menu", "help", "options"})
 # replies for intents whose handlers land in later tasks
 SOON = {
-    "split": "Group bill splitting is coming soon",
     "claim": "Claiming items on a bill is coming soon"
 }
 
@@ -91,7 +100,8 @@ class MessageReader:
     def by_rules(self, text: str) -> MessageResult:
         words = words_in(text)
         if "split" in words:
-            return MessageResult(intent="split")
+            ways = WAYS.search(text)
+            return MessageResult(intent="split", ways=int(ways.group(1)) if ways else None)
         if text.rstrip().endswith("?") or (words and words[0] in QUESTION_WORDS):
             return MessageResult(intent="ask")
         if REPEAT_WORDS.intersection(words):
@@ -105,16 +115,17 @@ class MessageReader:
 # routes one inbound message, fixed rules for bot formats and the model for language
 class Router:
     # logger for saving, reader for free text, assistant for questions, plans for budgets
-    # and bills for what the user expects to pay
+    # bills for what the user expects to pay and group for shared bills
     def __init__(
         self, logger: ExpenseLogger, reader: MessageReader, assistant: SpendAssistant,
-        plans: PlanManager, bills: UpcomingBills
+        plans: PlanManager, bills: UpcomingBills, group: GroupBills
     ) -> None:
         self._logger = logger
         self._reader = reader
         self._assistant = assistant
         self._plans = plans
         self._bills = bills
+        self._group = group
 
     # greet new users, then pick the handler for this message
     async def handle(self, inbound: Inbound, transport: Transport) -> None:
@@ -163,8 +174,9 @@ class Router:
     # a photo is a receipt unless its caption asks to split
     async def _image(self, inbound: Inbound, transport: Transport) -> None:
         caption = (inbound.text or "").strip()
-        if caption and (await self._reader.read(caption)).intent == "split":
-            await transport.send_text(inbound.user_id, SOON["split"])
+        result = await self._reader.read(caption) if caption else None
+        if result is not None and result.intent == "split":
+            await self._group.from_receipt(inbound, transport, result.ways)
             return
         await self._logger.log_receipt(inbound, transport)
 
@@ -205,6 +217,12 @@ class Router:
         if result.intent == "chat":
             await self.menu(inbound, transport)
             return
+        if result.intent == "split" and result.ways:
+            await self._group.split_evenly(inbound, transport, result.ways)
+            return
+        if result.intent == "split":
+            await transport.send_text(inbound.user_id, SPLIT_HINT)
+            return
         if result.intent in SOON:
             await transport.send_text(inbound.user_id, SOON[result.intent])
             return
@@ -236,10 +254,17 @@ locale = LOCALES[settings.locale]
 book = QuotaBook(SessionFactory)
 logger = ExpenseLogger(llm, SessionFactory, locale, book)
 bills = UpcomingBills(SessionFactory, logger, settings.remind_hour)
+# the bot number friends message to claim, from either provider
+bot_number = settings.whatsapp_bot_number or re.sub(r"\D", "", settings.twilio_whatsapp_from)
+group = GroupBills(
+    SessionFactory, logger, locale, ClaimTokens(settings.app_secret), settings.public_base_url,
+    bot_number
+)
 message_router = Router(
     logger,
     MessageReader(llm, locale),
     SpendAssistant(llm, SessionFactory, book, AFFORD_RULES[settings.locale]),
     PlanManager(SessionFactory, book, locale, llm),
-    bills
+    bills,
+    group
 )
