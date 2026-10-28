@@ -1,6 +1,6 @@
 import pytest
 
-from splitledger.handlers.log import money, quick_parse
+from splitledger.handlers.log import clean_note, money, quick_parse
 from splitledger.llm.schemas import GLOBAL
 from splitledger.llm.schemas_sg import SG
 
@@ -73,3 +73,18 @@ def test_extend_merges_words():
 def test_money():
     assert money(650, "SGD") == "SGD 6.50"
     assert money(100000, "JPY") == "JPY 1000.00"
+
+
+# notes keep what was bought and drop the amount, money words and stray punctuation
+@pytest.mark.parametrize(("note", "clean"), [
+    ("lunch with the team, about bucks", "lunch with the team"),
+    ("lunch with the team, about 25 bucks", "lunch with the team"),
+    ("Just spent 45 on petrol at Shell", "petrol at shell"),
+    ("gift for mom 30 SGD", "gift for mom"),
+    ("Coffee $6.50", "coffee"),
+    ("kopi", "kopi"),
+    ("about 20 bucks", None),
+    (None, None)
+])
+def test_clean_note(note, clean):
+    assert clean_note(note) == clean

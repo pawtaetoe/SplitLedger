@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your plan · SplitLedger</title>
+<script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+{% include "_style.html" %}
+</head>
+<body>
+<main>
+  <h1>Your budget plan</h1>
+  <p class="sub">Pick a plan and enter your pay. The amounts update as you go.</p>
+  <form method="post" action="/plan/save" hx-post="/plan/preview" hx-trigger="change, input delay:500ms" hx-target="#preview">
+    <fieldset>
+      <legend>Plan</legend>
+      {% for key in ["503020", "60", "pyf"] %}
+      {% set f = presets[key] %}
+      <label class="choice">
+        <input type="radio" name="choice" value="{{ key }}"{% if form.choice == key %} checked{% endif %}>
+        <span class="grow"><strong>{{ f.name }}</strong><span class="who">{{ f.blurb }}</span></span>
+      </label>
+      {% if key == "pyf" %}
+      <div class="inline" role="group" aria-label="How much to save first">
+        {% for pct in save_choices %}
+        <label class="pill"><input type="radio" name="save_pct" value="{{ pct }}"{% if form.save_pct == pct|string %} checked{% endif %}> Save {{ pct }}%</label>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endfor %}
+      <label class="choice">
+        <input type="radio" name="choice" value="custom"{% if form.choice == "custom" %} checked{% endif %}>
+        <span class="grow"><strong>Describe my own</strong><span class="who">your own split, or limits per category</span></span>
+      </label>
+      <label for="describe" class="note">In your words, like save 30%, food under 400 a month</label>
+      <textarea id="describe" name="describe" rows="2">{{ form.describe }}</textarea>
+      <button type="button" hx-post="/plan/draft" hx-include="closest form" hx-target="#preview">Draft my plan</button>
+    </fieldset>
+
+    <label for="pay"><strong>What you take home a month</strong></label>
+    <input id="pay" name="pay" type="text" inputmode="decimal" value="{{ form.pay }}" placeholder="4500" autocomplete="off">
+
+    <fieldset>
+      <legend>Check it</legend>
+      <div class="inline">
+        <label class="pill"><input type="radio" name="period" value="monthly"{% if form.period != "weekly" %} checked{% endif %}> Every month</label>
+        <label class="pill"><input type="radio" name="period" value="weekly"{% if form.period == "weekly" %} checked{% endif %}> Every week</label>
+      </div>
+    </fieldset>
+
+    <section id="preview" aria-live="polite">
+      {% include "plan_preview.html" %}
+    </section>
+
+    <div class="actions">
+      <button type="submit" class="on">Save plan</button>
+      <a class="button" href="/me">Back to dashboard</a>
+    </div>
+  </form>
+</main>
+</body>
+</html>

@@ -60,6 +60,22 @@ class Dashboard:
     def month_total(self) -> int:
         return sum(cents for _, cents in self.month)
 
+    # one net amount per person and currency, above zero they owe you, below you owe them
+    def people(self) -> list[Balance]:
+        net: dict[tuple[str, str], int] = {}
+        for balance in self.owed_to_me:
+            key = (balance.who, balance.currency)
+            net[key] = net.get(key, 0) + balance.cents
+        for balance in self.i_owe:
+            key = (balance.who, balance.currency)
+            net[key] = net.get(key, 0) - balance.cents
+        found = [Balance(who, cents, code) for (who, code), cents in net.items() if cents]
+        return sorted(found, key=lambda balance: -abs(balance.cents))
+
+    # net in the main currency, above zero friends owe you more than you owe
+    def net(self) -> int:
+        return sum(b.cents for b in self.people() if b.currency == self.user.currency)
+
 
 # reads one user's money across expenses, bills, plans and upcoming bills
 class Overview:

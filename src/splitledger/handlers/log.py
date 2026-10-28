@@ -28,6 +28,28 @@ MAX_VOICE_BYTES = 1_000_000
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 
 
+# words about the amount rather than the thing bought
+FILLER = re.compile(
+    r"\b(?:about|around|roughly|approx|approximately|bucks?|dollars?|quid|spent|paid|"
+    r"just now|just|only|cost|costs)\b",
+    re.IGNORECASE
+)
+
+
+# what was bought, without the amount, money words or stray punctuation
+def clean_note(note: str | None) -> str | None:
+    if not note:
+        return None
+    text = AMOUNT.sub(" ", note)
+    text = FILLER.sub(" ", text)
+    text = re.sub(rf"\b(?:{'|'.join(CURRENCY_CODES)})\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", " ".join(text.split()))
+    text = re.sub(r"([,;:])\s*[,;:.]+", r"\1", text).strip(" ,.;:-~!?").lower()
+    # a dangling joining word left at either end
+    text = re.sub(r"^(?:on|for|at|and|with)\s+|\s+(?:on|for|at|and|with)$", "", text)
+    return text or None
+
+
 # one amount in the locale currency plus a known keyword, else none
 def quick_parse(text: str, locale: Locale) -> ExpenseDraft | None:
     amounts = AMOUNT.findall(text)
@@ -36,8 +58,8 @@ def quick_parse(text: str, locale: Locale) -> ExpenseDraft | None:
     symbol, amount = amounts[0]
     if symbol and symbol not in locale.symbols:
         return None
-    note = " ".join(AMOUNT.sub(" ", text).split()).lower()
-    words = set(re.findall(r"[a-z]+", note))
+    words = set(re.findall(r"[a-z]+", " ".join(AMOUNT.sub(" ", text).split()).lower()))
+    note = clean_note(text)
     if words & CURRENCY_CODES:
         return None
     for category, keywords in locale.words.items():
@@ -215,13 +237,13 @@ class ExpenseLogger:
                 currency=currency,
                 category=draft.category,
                 vendor=draft.vendor,
-                note=draft.note,
+                note=clean_note(draft.note),
                 source=source,
                 status=LedgerStatus.POSTED
             )
             session.add(entry)
             await session.commit()
-        label = draft.vendor or draft.note or ""
+        label = draft.vendor or clean_note(draft.note) or ""
         details = f"{draft.category} · {label}" if label else draft.category
         text = f"✅ *Logged {money(amount, currency)}*\n{details}"
         lines = await self._book.after_save(user_id, draft.category) if self._book else []

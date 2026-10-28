@@ -49,3 +49,7 @@ def test_sign_in_pages(monkeypatch):
     response = web.get(f"/d/{fresh}", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/me"
     assert "sl_me=" in response.headers["set-cookie"]
+    to_plan = web.get(f"/d/{fresh}?to=plan", follow_redirects=False)
+    assert to_plan.headers["location"] == "/plan"
+    elsewhere = web.get(f"/d/{fresh}?to=https://evil.example", follow_redirects=False)
+    assert elsewhere.headers["location"] == "/me"

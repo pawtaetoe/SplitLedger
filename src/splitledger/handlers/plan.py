@@ -5,8 +5,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from sqlalchemy import delete, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.contracts.llm import LLM
@@ -17,7 +16,8 @@ from splitledger.handlers.log import ensure_user, money
 from splitledger.llm.schemas import CustomPlan, Locale
 from splitledger.plans.custom import check_plan, fits_income
 from splitledger.plans.frameworks import PRESETS, SAVE_CHOICES, Framework, pay_yourself_first
-from splitledger.plans.quota import QuotaBook, bucket_quota
+from splitledger.plans.quota import QuotaBook
+from splitledger.plans.store import plan_amounts, save_plan
 
 WELCOME = (
     "*Hi! I keep track of what you spend.*\n"
@@ -116,7 +116,9 @@ class PlanManager:
         preset = PRESETS.get(report.plan.framework)
         name = preset.name if preset else "Your own plan"
         text = f"*Your plan: {name}*\nThis {report.unit()}:\n" + "\n".join(parts)
-        buttons = [("plan:change", "Change"), ("plan:remove", "Remove")]
+        buttons = [
+            ("plan:change", "Change"), ("plan:web", "Change on a page"), ("plan:remove", "Remove")
+        ]
         await transport.send_buttons(inbound.user_id, text, buttons)
 
     # first step, pick a framework
@@ -173,7 +175,8 @@ class PlanManager:
         if action == "more":
             sixty = PRESETS["60"]
             buttons = [(f"plan:fw:{sixty.key}", f"{sixty.name} — {sixty.blurb}"), OWN]
-            await transport.send_buttons(user, "*More choices*", [*buttons, ("plan:setup", "Back")])
+            on_page = ("plan:web", "Set up on a page — every choice on one screen")
+            await transport.send_buttons(user, "*More choices*", [*buttons, on_page])
             return
         if action == "fw:custom":
             draft.step = "describe"
@@ -277,10 +280,10 @@ class PlanManager:
         draft.step = "confirm"
         currency = await self._currency(inbound.user_id)
         unit = "week" if draft.period == "weekly" else "month"
-        shares = []
-        for name, pct in framework.buckets.items():
-            quota = bucket_quota(draft.take_home_cents, pct, framework.caps.get(name), draft.period)
-            shares.append(f"- {name}: *{money(quota, currency)}*")
+        shares = [
+            f"- {name}: *{money(quota, currency)}*"
+            for name, quota, _ in plan_amounts(framework, draft.take_home_cents, draft.period)
+        ]
         credit = f"_Based on {framework.source}_" if framework.source else (
             "_Your own plan, drafted with Muse Spark_"
         )
@@ -303,25 +306,10 @@ class PlanManager:
         if framework is None or draft.period is None:
             await self.start(inbound, transport)
             return
-        values = {
-            "framework": framework.key,
-            "period": draft.period,
-            "buckets": framework.buckets,
-            "category_map": framework.category_map,
-            "caps": framework.caps,
-            "step_up_pct": 1 if framework.key == "pyf" else None
-        }
         async with self._sessions() as session:
             user_id, _ = await ensure_user(session, inbound.user_id, self._locale)
-            await session.execute(
-                update(User).where(User.id == user_id).values(
-                    take_home_cents=draft.take_home_cents
-                )
-            )
-            await session.execute(
-                insert(BudgetPlan)
-                .values(user_id=user_id, **values)
-                .on_conflict_do_update(index_elements=["user_id"], set_=values)
+            await save_plan(
+                session, user_id, framework, draft.period, draft.take_home_cents or 0
             )
             await session.commit()
         self._drafts.pop(inbound.user_id, None)

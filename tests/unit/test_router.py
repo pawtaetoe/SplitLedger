@@ -307,4 +307,5 @@ async def test_dashboard_routes():
     router = build(llm, dash=dash)
     await router.handle(button("menu:dash"), FakeTransport())
     await router.handle(text("my dashboard"), FakeTransport())
-    assert dash.sent == 2 and llm.structured_calls == []
+    await router.handle(button("plan:web"), FakeTransport())
+    assert dash.pages == ["me", "me", "plan"] and llm.structured_calls == []

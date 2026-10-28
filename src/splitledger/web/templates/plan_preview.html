@@ -1,0 +1,13 @@
+<input type="hidden" name="custom" value="{{ form.custom }}">
+{% if problem %}
+<p class="error" role="alert">{{ problem }}</p>
+{% else %}
+<h2>{{ framework.name }}, each {{ unit }}</h2>
+<ul>
+  {% for name, cents, saving in amounts %}
+  <li class="row"><span>{{ name }}{% if saving %} · put aside{% endif %}</span><strong>{{ money(cents, currency) }}</strong></li>
+  {% endfor %}
+</ul>
+{% for note in notes %}<p class="note">{{ note }}</p>{% endfor %}
+<p class="note">{% if framework.source %}Based on {{ framework.source }}{% else %}Your own plan, drafted with Muse Spark{% endif %}</p>
+{% endif %}

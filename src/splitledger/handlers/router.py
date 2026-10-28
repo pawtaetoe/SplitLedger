@@ -171,6 +171,9 @@ class Router:
 
     # each button prefix goes to its handler, unknown ones echo
     async def _button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
+        if button_id == "plan:web":
+            await self._dash.send(inbound, transport, "plan")
+            return
         if button_id.startswith("plan:"):
             await self._plans.on_button(inbound, button_id, transport)
             return
