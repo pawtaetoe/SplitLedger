@@ -12,3 +12,7 @@ class FakeAssistant:
     async def answer(self, inbound: Inbound, transport: Transport) -> None:
         self.asked.append(inbound.text or "")
 
+
+    # record the owed list
+    async def owed(self, inbound: Inbound, transport: Transport) -> None:
+        self.asked.append("owed")

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
-from splitledger.db.models import Bill, BillItem, BillStatus, Participant, User
+from splitledger.db.models import Bill, BillItem, BillStatus, ItemClaim, Participant, User
 from splitledger.handlers.log import ExpenseLogger, ensure_user, money, receipt_adds_up
 from splitledger.llm.schemas import Locale, ReceiptDraft
 from splitledger.split.finalise import BillCloser, Closing, Leftovers
@@ -62,6 +62,21 @@ NOTHING_OPEN = (
 LEFTOVER_ASK = "*Nobody claimed {}*\nWho pays for {}?"
 SHORT_ASK = "*Only {} of {} people have joined*\nClose anyway? You cover the rest."
 OWED_TO_FRIEND = "*You owe {} {}*\nFor {}. Logged as your {} expense."
+OWE_ALL = ("owe:all", "Everything I owe")
+AUTO_CLOSED = "Everyone has claimed, so I closed it."
+ALL_IN = (
+    "*Everyone's in · {}*\n"
+    "I'll close it in 15 minutes unless someone changes a claim, "
+    "or tap Close the bill to close it now."
+)
+# minutes with no claim changes before a fully claimed bill closes itself
+QUIET_MINUTES = 15
+STILL_OPEN = (
+    "*{} is still open*\n{}\n"
+    "Close it so each person's share is logged and shows what they owe."
+)
+# hours before an open bill that isn't fully claimed gets one reminder
+NUDGE_HOURS = 24
 NO_TOTAL = "*I couldn't read the total*\nTry a flat, well lit photo of the whole receipt."
 NO_BILL = (
     "*Which bill?*\nSend the receipt photo with the caption _split {} ways_ "
@@ -93,7 +108,7 @@ def forward_text(bill: Bill, items: list[BillItem], claim_url: str, chat_url: st
     return (
         f"{title}\nTap what you had and I'll work out your share.\n\n"
         + "\n".join(lines) + extra
-        + f"\n\n*Claim on the web*\n{claim_url}\n\n*Or in WhatsApp*\n{chat_url}"
+        + f"\n\n*Claim in WhatsApp*\n{chat_url}\n\n*See the bill*\n{claim_url}"
     )
 
 
@@ -111,7 +126,7 @@ def even_text(bill: Bill, claim_url: str, chat_url: str) -> str:
     return (
         f"*{where}{money(bill.total, bill.currency)}*\n"
         f"Split evenly {ways} ways: *{money(each, bill.currency)}* each.\n\n"
-        f"*Say you're in on the web*\n{claim_url}\n\n*Or in WhatsApp*\n{chat_url}"
+        f"*Say you're in, in WhatsApp*\n{chat_url}\n\n*See the bill*\n{claim_url}"
     )
 
 
@@ -282,6 +297,93 @@ class GroupBills:
             await session.commit()
         await self._send(inbound, transport, fresh, items)
 
+    # close bills everyone has claimed, and ask once about bills left open a day
+    async def nudge(self, transport: Transport, now: datetime) -> int:
+        query = (
+            select(Bill, User.wa_user_id)
+            .join(User, Bill.payer_id == User.id)
+            .where(Bill.status == BillStatus.OPEN)
+        )
+        ready: list[tuple[Bill, str]] = []
+        sent = 0
+        async with self._sessions() as session:
+            rows = (await session.execute(query)).all()
+            for bill, payer_wa in rows:
+                done, text = await self._state(session, bill, now)
+                if done:
+                    ready.append((bill, payer_wa))
+                    continue
+                if text is None or bill.nudged_at is not None:
+                    continue
+                try:
+                    await transport.send_buttons(payer_wa, text, close_button(bill))
+                except Exception as error:
+                    LOG.warning("close nudge failed with %s", type(error).__name__)
+                    continue
+                bill.nudged_at = now
+                sent += 1
+            await session.commit()
+        for bill, payer_wa in ready:
+            closing = await self._closer.close(bill.id)
+            if closing is not None:
+                await self._tell(payer_wa, transport, closing, AUTO_CLOSED)
+                sent += 1
+        return sent
+
+    # whether to close now, and what to tell the payer: everyone's in, or left open a day
+    async def _state(
+        self, session: AsyncSession, bill: Bill, now: datetime
+    ) -> tuple[bool, str | None]:
+        people = (await session.execute(
+            select(func.count()).where(Participant.bill_id == bill.id)
+        )).scalar_one()
+        items = select(BillItem.id).where(BillItem.bill_id == bill.id)
+        count = select(func.count()).select_from(items.subquery())
+        total = (await session.execute(count)).scalar_one()
+        claimed = (await session.execute(
+            select(func.count(func.distinct(ItemClaim.bill_item_id)))
+            .where(ItemClaim.bill_item_id.in_(items))
+        )).scalar_one()
+        everyone = (
+            people >= bill.even_ways if bill.even_ways
+            else bool(total) and claimed == total and people > 1
+        )
+        quiet = bill.claimed_at is None or now - bill.claimed_at >= timedelta(minutes=QUIET_MINUTES)
+        if everyone:
+            return quiet, None if quiet else ALL_IN.format(bill.vendor or "Your bill")
+        if now - bill.created_at < timedelta(hours=NUDGE_HOURS) or people < 2:
+            return False, None
+        left = (
+            f"{people} of {bill.even_ways} people have joined." if bill.even_ways
+            else f"{total - claimed} of {total} items are still unclaimed."
+        )
+        return False, STILL_OPEN.format(bill.vendor or "Your bill", left)
+
+    # close from the web page: only the payer, leftovers come back as names to ask about
+    async def close_for(
+        self, user_id: uuid.UUID, code: str, choice: str, transport: Transport
+    ) -> tuple[str, list[str]]:
+        query = (
+            select(Bill, User.wa_user_id)
+            .join(User, Bill.payer_id == User.id)
+            .where(Bill.code == code)
+        )
+        async with self._sessions() as session:
+            row = (await session.execute(query)).first()
+        if row is None or row[0].payer_id != user_id:
+            return "not_payer", []
+        bill, payer_wa = row
+        try:
+            closing = await self._closer.close(
+                bill.id, choice if choice in ("even", "mine") else "ask"
+            )
+        except Leftovers as left:
+            return "leftovers", left.names
+        if closing is None:
+            return "closed_already", []
+        await self._tell(payer_wa, transport, closing)
+        return "closed", []
+
     # close the payer's latest open bill, asked for in words
     async def close_latest(self, inbound: Inbound, transport: Transport) -> None:
         since = datetime.now(UTC) - timedelta(days=CLOSE_DAYS)
@@ -337,10 +439,12 @@ class GroupBills:
         if closing is None:
             await transport.send_text(inbound.user_id, CLOSED_ALREADY)
             return
-        await self._tell(inbound, transport, closing)
+        await self._tell(inbound.user_id, transport, closing)
 
     # the payer gets everyone's share, each friend with an account gets what they owe
-    async def _tell(self, inbound: Inbound, transport: Transport, closing: Closing) -> None:
+    async def _tell(
+        self, payer_wa: str, transport: Transport, closing: Closing, why: str = ""
+    ) -> None:
         bill = closing.bill
         c = bill.currency
         category = (bill.category or "Other").lower()
@@ -350,13 +454,13 @@ class GroupBills:
             for share in closing.shares if share.person.id != closing.payer.id and share.cents
         ]
         text = (
-            f"*Bill closed · {bill.vendor or 'Bill'}*\n"
-            f"You paid {money(bill.total, c)}. "
+            f"*Bill closed · {bill.vendor or 'Bill'}*\n" + (f"{why}\n" if why else "")
+            + f"You paid {money(bill.total, c)}. "
             f"Your share *{money(mine, c)}* is logged as {category}."
         )
         if owed:
             text += "\n\n*Owed to you*\n" + "\n".join(owed)
-        await transport.send_text(inbound.user_id, text)
+        await transport.send_text(payer_wa, text)
         friends = [s.person.user_id for s in closing.shares if s.person.user_id and s.cents]
         async with self._sessions() as session:
             users = {
@@ -372,7 +476,7 @@ class GroupBills:
             amount = money(share.cents, c)
             text = OWED_TO_FRIEND.format(closing.payer.guest_name, amount, what, category)
             try:
-                await transport.send_text(user.wa_user_id, text)
+                await transport.send_buttons(user.wa_user_id, text, [OWE_ALL])
             except Exception as error:
                 LOG.warning("owed message failed with %s", type(error).__name__)
 

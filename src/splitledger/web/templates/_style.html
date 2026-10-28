@@ -83,4 +83,17 @@
   details.fold summary::-webkit-details-marker { display: none; }
   .bar.thin { height: 6px; margin: 0; }
   a.more { display: inline-block; padding: 6px 0 12px; color: var(--teal); font-weight: 600; text-decoration: none; }
+  a.back { display: inline-flex; align-items: center; min-height: 44px; color: var(--teal); font-weight: 600; text-decoration: none; }
+  .total { display: flex; align-items: center; gap: 12px; }
+  .total .status { flex: none; font-size: 0.9rem; opacity: 0.9; }
+  .htmx-indicator { display: none; }
+  .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }
+  .htmx-request ~ .done, .status:has(.htmx-request) .done { display: none; }
+  .saved { background: #e6f4ef; color: var(--ink); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+  a.button.on { background: var(--teal); color: #fff; }
+  .amount.muted { color: var(--muted); }
+  details.mix summary { cursor: pointer; list-style: none; }
+  details.mix summary::-webkit-details-marker { display: none; }
+  details.mix[open] .chev { display: inline-block; transform: rotate(90deg); }
+  details.mix .line.who { display: flex; padding: 4px 0 0; }
 </style>

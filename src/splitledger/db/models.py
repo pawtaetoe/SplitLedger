@@ -182,6 +182,10 @@ class Bill(Base):
         sa.DateTime(timezone=True), server_default=sa.func.now()
     )
     finalised_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # when the payer was last asked to close it
+    nudged_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # when anyone last claimed, joined or changed a claim, for the quiet period before closing
+    claimed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 # one line on a bill

@@ -1,0 +1,6 @@
+{
+  "intent": "split",
+  "expense": null,
+  "ways": 4,
+  "split_mode": "even"
+}

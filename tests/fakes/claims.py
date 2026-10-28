@@ -7,6 +7,7 @@ class FakeClaims:
     # no calls yet
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.open = False
 
     # record a claim by code
     async def by_code(self, inbound: Inbound, text: str, transport: Transport) -> None:
@@ -22,3 +23,11 @@ class FakeClaims:
     # record a claim button
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
         self.calls.append(f"button {button_id}")
+
+    # whether bare numbers count as claims, set by tests
+    def has_bill(self, wa_user_id: str) -> bool:
+        return self.open
+
+    # record bare numbers
+    async def numbers(self, inbound: Inbound, text: str, transport: Transport) -> None:
+        self.calls.append(f"numbers {text}")

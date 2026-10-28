@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.meta.ai/v1"
     llm_model: str = ""
     app_secret: str = ""
+    # exchangerate-api.com key, optional, free sources are used without it
+    exchange_rate_api_key: str = ""
     # local hour from which bill reminders go out
     remind_hour: int = 9
 

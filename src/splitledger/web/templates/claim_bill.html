@@ -15,27 +15,20 @@
   </div>
 </header>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if notice and not open %}<p class="saved" role="status">{{ notice }}</p>{% endif %}
 {% if not open %}<p class="note">This bill is closed. These are the final shares.</p>{% endif %}
 
 {% if view.me is none and open %}
-<section class="card" aria-labelledby="who">
-  <h2 id="who">Who are you?</h2>
-  {% if view.people %}
-  <div class="actions">
-    {% for person in view.people %}
-    <form method="post" action="/c/{{ token }}/join">
-      <input type="hidden" name="name" value="{{ person.guest_name }}">
-      <button type="submit">I'm {{ person.guest_name }}</button>
-    </form>
-    {% endfor %}
-  </div>
-  <p class="note">Not listed? Type your name.</p>
+<section class="card" aria-labelledby="join">
+  {% if signed_in %}
+  <h2 id="join">Join this bill</h2>
+  <p class="note">You're signed in from WhatsApp. Join to {% if bill.even_ways %}take your share{% else %}tick what you had{% endif %}, and it goes into your own records.</p>
+  <form method="post" action="/c/{{ token }}/join"><button type="submit" class="on">Join this bill</button></form>
+  {% else %}
+  <h2 id="join">Claim from WhatsApp</h2>
+  <p class="note">Claims are made from your WhatsApp so your share shows up in your own records. Tap below, send the message, and I'll reply with your own link to this page.</p>
+  <a class="button on" href="{{ chat_url }}">Open WhatsApp to claim</a>
   {% endif %}
-  <form method="post" action="/c/{{ token }}/join">
-    <label for="name">Your name</label>
-    <input id="name" name="name" type="text" maxlength="40" autocomplete="given-name" required>
-    <button type="submit" class="on">{% if bill.even_ways %}I'm in{% else %}Continue{% endif %}</button>
-  </form>
 </section>
 {% endif %}
 
@@ -49,13 +42,13 @@
 </form>
 {% endif %}
 {% elif ticking %}
-<p class="note">Tick everything you had. If others tick the same thing, you share it.</p>
+<p class="note">Tick everything you had. It saves as you go, and if others tick the same thing you share it.</p>
 {% endif %}
 
 {% if view.lines %}
 <h2>On the receipt</h2>
 {% if ticking %}
-<form method="post" action="/c/{{ token }}/mine" hx-post="/c/{{ token }}/mine" hx-trigger="change" hx-target="#bill">
+<form id="mine-form" method="post" action="/c/{{ token }}/mine" hx-post="/c/{{ token }}/mine" hx-trigger="change delay:500ms" hx-target="#bill" hx-indicator="#saving">
 {% endif %}
 {% macro tick(line, label, spoken) %}
 <label class="tick">
@@ -107,6 +100,23 @@
 {% endif %}
 {% endif %}
 
+{% if is_payer and open %}
+<section class="card" aria-labelledby="close">
+  {% if leftovers %}
+  <h2 id="close">Nobody claimed {{ leftovers|join(", ") }}</h2>
+  <p class="note">Who pays for {{ "it" if leftovers|length == 1 else "them" }}?</p>
+  <div class="actions">
+    <form method="post" action="/c/{{ token }}/close"><input type="hidden" name="choice" value="even"><button type="submit" class="on">Everyone shares</button></form>
+    <form method="post" action="/c/{{ token }}/close"><input type="hidden" name="choice" value="mine"><button type="submit">I'll pay</button></form>
+  </div>
+  {% else %}
+  <h2 id="close">Done collecting?</h2>
+  <p class="note">It closes by itself 15 minutes after everyone has claimed. Close now to send everyone what they owe.</p>
+  <form method="post" action="/c/{{ token }}/close"><button type="submit" class="on">Close the bill now</button></form>
+  {% endif %}
+</section>
+{% endif %}
+
 <h2>Who pays what</h2>
 <ul>
   {% for person in view.people %}
@@ -120,6 +130,11 @@
 
 {% if view.me is not none %}
 <div class="total" aria-live="polite">
-  Your share{% if open and not bill.even_ways %} so far{% endif %}<br><strong>{{ money(view.share, bill.currency) }}</strong>
+  <div class="grow">
+    Your share{% if open and not bill.even_ways %} so far{% endif %}<br>
+    <strong>{{ money(view.share, bill.currency) }}</strong>
+  </div>
+  {% if ticking %}<span class="status"><span id="saving" class="htmx-indicator">Saving</span>{% if notice %}<span class="done">{{ notice }}</span>{% endif %}</span>{% endif %}
 </div>
+{% if open and not bill.even_ways %}<p class="note">When everyone has claimed, the bill closes by itself and you'll get a message with what you owe.</p>{% endif %}
 {% endif %}

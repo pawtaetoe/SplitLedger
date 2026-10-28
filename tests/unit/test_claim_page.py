@@ -20,7 +20,7 @@ class NoBook:
 
 # a client for the claim routes with a known secret
 def client(monkeypatch) -> TestClient:
-    page = ClaimPage(ClaimTokens("secret"), NoBook(), False)
+    page = ClaimPage(ClaimTokens("secret"), NoBook(), "6512345678")
     monkeypatch.setattr(claim_module, "claim_page", page)
     app = FastAPI()
     app.include_router(claim_router)

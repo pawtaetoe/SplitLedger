@@ -20,6 +20,7 @@ from splitledger.plans import afford
 from splitledger.plans.afford import Ask, Means, Rule, Spending, assess, to_cents
 from splitledger.plans.quota import QuotaBook
 from splitledger.plans.upcoming import EVERY, open_days, outlook
+from splitledger.split.overview import Overview
 
 LOG = logging.getLogger(__name__)
 PROMPT = (Path(__file__).parents[1] / "llm" / "prompts" / "assistant.md").read_text(
@@ -35,6 +36,7 @@ CHECKING = "Checking your spending…"
 NOTHING_YET = "You haven't logged anything yet. Try something like coffee 4.50 first"
 UNAVAILABLE = "I couldn't work that out just now. Please try again in a minute"
 DISCLAIMER = "_A rule of thumb, not financial advice._"
+ALL_SQUARE = "*You're all square*\nNobody owes anybody right now."
 # days ahead to look for the next time a plan is due
 NEXT_DAYS = 400
 DAYS = {"type": "string", "description": "local calendar day as YYYY-MM-DD"}
@@ -151,8 +153,8 @@ class SpendTools:
                  guarded(self.top_expenses), with_count),
             Tool("list_expenses", "expenses between two days, newest first",
                  guarded(self.list_expenses), with_category),
-            Tool("who_owes_me", "money friends still owe from shared bills",
-                 guarded(self.who_owes_me)),
+            Tool("balances", "who owes the user, whom the user owes, and shares on open bills",
+                 guarded(self.balances)),
             Tool("plan_status", "budget plan buckets with quota, spent and left this period",
                  guarded(self.plan_status)),
             Tool("can_afford", "check a purchase, car or home against named affordability rules",
@@ -190,25 +192,31 @@ class SpendTools:
         rows = await self._rows(args, LedgerEntry.occurred_at.desc(), LIST_LIMIT + 1)
         return {"expenses": rows[:LIST_LIMIT], "more": len(rows) > LIST_LIMIT}
 
-    # open money owed to the user, by friend
-    async def who_owes_me(self, args: dict[str, Any]) -> dict[str, Any]:
-        # friends without an account are named by the note on their row
-        who = func.coalesce(User.display_name, LedgerEntry.note)
-        query = (
-            select(who, LedgerEntry.currency, func.sum(LedgerEntry.amount_cents))
-            .join(User, LedgerEntry.counterparty_id == User.id, isouter=True)
-            .where(
-                LedgerEntry.user_id == self._user_id,
-                LedgerEntry.kind == LedgerKind.RECEIVABLE,
-                LedgerEntry.voided_at.is_(None)
-            )
-            .group_by(who, LedgerEntry.currency)
-        )
-        async with self._sessions() as session:
-            rows = (await session.execute(query)).all()
-        owed = [{"who": name or "a friend", "owes": money(int(cents), code)}
-                for name, code, cents in rows]
-        return {"owed": owed}
+    # who owes the user and whom the user owes, plus shares on bills still open
+    async def balances(self, args: dict[str, Any]) -> dict[str, Any]:
+        board = await Overview(self._sessions, self._book).build(self._user_id)
+        if board is None:
+            return {"error": "unknown user"}
+        people = board.people()
+        return {
+            "they_owe_you": [
+                {"who": b.who, "amount": money(b.cents, b.currency)} for b in people if b.cents > 0
+            ],
+            "you_owe": [
+                {"who": b.who, "amount": money(-b.cents, b.currency)} for b in people if b.cents < 0
+            ],
+            "open_bills_you_are_in": [
+                {"bill": row.bill.vendor or row.bill.code, "paid_by": row.payer_name,
+                 "your_share_so_far": money(row.mine, row.bill.currency)}
+                for row in board.joined
+            ],
+            "open_bills_you_paid": [
+                {"bill": row.bill.vendor or row.bill.code,
+                 "friends_share_so_far": money(row.others, row.bill.currency)}
+                for row in board.paid
+            ],
+            "note": "open bill shares are not owed until the bill closes"
+        }
 
     # the plan for this period from the quota book
     async def plan_status(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -421,6 +429,14 @@ class SpendAssistant:
         self._book = book
         self._rules = rules
 
+    # who owes whom straight from the ledger, with the dashboard one tap away
+    async def owed(self, inbound: Inbound, transport: Transport) -> None:
+        async with self._sessions() as session:
+            query = select(User.id).where(User.wa_user_id == inbound.user_id)
+            user_id = (await session.execute(query)).scalar_one_or_none()
+        text = await owed_text(self._sessions, self._book, user_id) if user_id else ALL_SQUARE
+        await transport.send_buttons(inbound.user_id, text, [("menu:dash", "My dashboard")])
+
     # say we are checking, run the tool loop, reply with its answer or a fallback
     async def answer(self, inbound: Inbound, transport: Transport) -> None:
         async with self._sessions() as session:
@@ -458,3 +474,28 @@ class SpendAssistant:
             await transport.send_buttons(inbound.user_id, reply, buttons)
             return
         await transport.send_text(inbound.user_id, reply)
+
+
+# a plain list of who owes whom, for the button under a you owe message, no model needed
+async def owed_text(
+    sessions: async_sessionmaker[AsyncSession], book: QuotaBook, user_id: uuid.UUID
+) -> str:
+    board = await Overview(sessions, book).build(user_id)
+    if board is None:
+        return ALL_SQUARE
+    people = board.people()
+    owe = [f"- {b.who} *{money(-b.cents, b.currency)}*" for b in people if b.cents < 0]
+    owed = [f"- {b.who} *{money(b.cents, b.currency)}*" for b in people if b.cents > 0]
+    waiting = [
+        f"- {row.payer_name or 'whoever paid'} for {row.bill.vendor or 'a bill'}: "
+        f"{money(row.mine, row.bill.currency)} so far"
+        for row in board.joined if row.mine
+    ]
+    parts: list[str] = []
+    if owe:
+        parts.append("*You owe*\n" + "\n".join(owe))
+    if owed:
+        parts.append("*Owed to you*\n" + "\n".join(owed))
+    if waiting:
+        parts.append("*Open bills, not owed yet*\n" + "\n".join(waiting))
+    return "\n\n".join(parts) if parts else ALL_SQUARE

@@ -25,6 +25,7 @@ from splitledger.plans.afford_sg import SG_RULES
 from splitledger.plans.quota import QuotaBook
 from splitledger.settings import settings
 from splitledger.split.claims import ClaimBook
+from splitledger.split.fx import Rates
 from splitledger.split.tokens import ClaimTokens, LoginLinks
 
 LOG = logging.getLogger(__name__)
@@ -45,6 +46,8 @@ QUESTION_WORDS = frozenset(
 )
 # the payer closing their bill in words
 CLOSE = re.compile(r"^(close|finish|finalise|finalize)\s+(the\s+|my\s+)?bill\b", re.IGNORECASE)
+# item numbers like 2, 6 or 1 and 3
+NUMBER_LIST = re.compile(r"^\d{1,2}(?:\s*(?:,|&|and|\s)\s*\d{1,2})*$", re.IGNORECASE)
 # a caption longer than this may say who had what
 CAPTION_WORDS = 3
 # a head count in a split like 4 ways or 4 pax
@@ -88,6 +91,13 @@ def words_in(text: str) -> list[str]:
     return re.findall(r"[a-z]+", text.lower())
 
 
+# a friend arriving from a forwarded bill, who needs the bill and not the welcome
+def claiming(inbound: Inbound) -> bool:
+    if inbound.kind == "button":
+        return (inbound.button_id or "").startswith("claim:")
+    return inbound.kind == "text" and CLAIM.match((inbound.text or "").strip()) is not None
+
+
 # reads free text with one model call, keyword rules only when the model fails
 class MessageReader:
     # model for reading and the locale for the fallback rules
@@ -112,7 +122,7 @@ class MessageReader:
         if "split" in words:
             by_item = bool(BY_ITEM.intersection(words))
             ways = None if by_item else WAYS.search(text)
-            mode: SplitMode = "items" if by_item else ("even" if ways else "unsure")
+            mode: SplitMode = "even" if ways and not by_item else "items"
             return MessageResult(
                 intent="split", ways=int(ways.group(1)) if ways else None, split_mode=mode
             )
@@ -145,9 +155,10 @@ class Router:
         self._claims = claims
         self._dash = dash
 
-    # greet new users, then pick the handler for this message
+    # greet new users unless they came to claim a bill, then pick the handler
     async def handle(self, inbound: Inbound, transport: Transport) -> None:
-        await self._plans.welcome_if_new(inbound, transport)
+        if not claiming(inbound):
+            await self._plans.welcome_if_new(inbound, transport)
         if inbound.kind == "button":
             await self._button(inbound, inbound.button_id or "", transport)
             return
@@ -179,6 +190,9 @@ class Router:
             return
         if button_id.startswith("bills:"):
             await self._bills.on_button(inbound, button_id, transport)
+            return
+        if button_id == "owe:all":
+            await self._assistant.owed(inbound, transport)
             return
         if button_id.startswith("bill:"):
             await self._group.on_button(inbound, button_id, transport)
@@ -240,6 +254,9 @@ class Router:
         if CLAIM.match(text):
             await self._claims.by_code(inbound, text, transport)
             return
+        if NUMBER_LIST.match(text) and self._claims.has_bill(inbound.user_id):
+            await self._claims.numbers(inbound, text, transport)
+            return
         result = await self._reader.read(text)
         if result.intent == "log":
             draft = result.expense or ExpenseDraft(amount_cents=None)
@@ -291,7 +308,9 @@ class Router:
 
 llm = MetaLLM()
 locale = LOCALES[settings.locale]
-book = QuotaBook(SessionFactory)
+# one set of exchange rates for plans and the dashboard, fetched twice a day at most
+rates = Rates(settings.exchange_rate_api_key)
+book = QuotaBook(SessionFactory, rates)
 logger = ExpenseLogger(llm, SessionFactory, locale, book)
 bills = UpcomingBills(SessionFactory, logger, settings.remind_hour)
 # the bot number friends message to claim, from either provider
@@ -300,6 +319,10 @@ group = GroupBills(
     SessionFactory, logger, locale, ClaimTokens(settings.app_secret), settings.public_base_url,
     bot_number
 )
+links = DashboardLink(
+    SessionFactory, LoginLinks(ClaimTokens(settings.app_secret), LINK_MINUTES * 60),
+    settings.public_base_url, locale
+)
 message_router = Router(
     logger,
     MessageReader(llm, locale),
@@ -307,9 +330,6 @@ message_router = Router(
     PlanManager(SessionFactory, book, locale, llm),
     bills,
     group,
-    ClaimChat(SessionFactory, llm, ClaimBook(SessionFactory), locale),
-    DashboardLink(
-        SessionFactory, LoginLinks(ClaimTokens(settings.app_secret), LINK_MINUTES * 60),
-        settings.public_base_url, locale
-    )
+    ClaimChat(SessionFactory, llm, ClaimBook(SessionFactory), locale, links),
+    links
 )

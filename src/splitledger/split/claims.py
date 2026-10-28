@@ -1,12 +1,12 @@
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from fractions import Fraction
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from splitledger.db.models import Bill, BillItem, BillStatus, ItemClaim, Participant
+from splitledger.db.models import Bill, BillItem, BillStatus, ItemClaim, Participant, User
 from splitledger.handlers.bill import MAX_UNITS, even_share, unit_prices
 from splitledger.llm.schemas import unescape
 from splitledger.split.finalise import post_late
@@ -204,6 +204,7 @@ class ClaimBook:
                 await session.execute(delete(ItemClaim).where(
                     ItemClaim.bill_item_id == item_id, ItemClaim.participant_id == me
                 ))
+                bill.claimed_at = datetime.now(UTC)
                 await session.commit()
                 return None
             holders = list((await session.execute(
@@ -217,6 +218,7 @@ class ClaimBook:
             if action == "mine" and others:
                 return TAKEN.format(others[0])
             session.add(ItemClaim(bill_item_id=item_id, participant_id=me, weight=weight))
+            bill.claimed_at = datetime.now(UTC)
             await session.commit()
         return None
 
@@ -245,6 +247,8 @@ class ClaimBook:
             session.add_all(
                 ItemClaim(bill_item_id=item, participant_id=me) for item in item_ids - held
             )
+            if held != item_ids:
+                bill.claimed_at = datetime.now(UTC)
             await session.commit()
         return None
 
@@ -283,6 +287,25 @@ class ClaimBook:
         async with self._sessions() as session:
             return (await session.execute(query)).scalar_one_or_none()
 
+    # the person a whatsapp user is on the bill with this code, none before they join
+    async def person_of(self, code: str, user_id: uuid.UUID) -> uuid.UUID | None:
+        query = (
+            select(Participant.id)
+            .join(Bill, Participant.bill_id == Bill.id)
+            .where(Bill.code == code, Participant.user_id == user_id)
+        )
+        async with self._sessions() as session:
+            return (await session.execute(query)).scalar_one_or_none()
+
+    # a signed in whatsapp user joins a bill under their profile name
+    async def join_user(self, bill_id: uuid.UUID, user_id: uuid.UUID) -> uuid.UUID:
+        async with self._sessions() as session:
+            user = await session.get(User, user_id)
+        if user is None:
+            raise ValueError("unknown user")
+        name = user.display_name or f"Friend {user.wa_user_id[-4:]}"
+        return await self.person_for(bill_id, user_id, name)
+
     # the user's person on a bill, linking a guest of the same name or adding one
     async def person_for(self, bill_id: uuid.UUID, user_id: uuid.UUID, name: str) -> uuid.UUID:
         async with self._sessions() as session:
@@ -309,6 +332,8 @@ class ClaimBook:
             bill = await session.get(Bill, bill_id)
             if bill is not None and bill.status != BillStatus.OPEN:
                 await post_late(session, bill, guest)
+            elif bill is not None:
+                bill.claimed_at = datetime.now(UTC)
             await session.commit()
             return guest.id
 
@@ -327,6 +352,7 @@ class ClaimBook:
                     ItemClaim.participant_id == person, ItemClaim.bill_item_id == item
                 ))
                 session.add(ItemClaim(participant_id=person, bill_item_id=item, weight=weight))
+            bill.claimed_at = datetime.now(UTC)
             await session.commit()
         return True
 

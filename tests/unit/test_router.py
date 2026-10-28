@@ -252,7 +252,7 @@ def test_rules_read_ways():
     assert reader.by_rules("split this").ways is None
     assert reader.by_rules("split this 7 ways by dish").ways is None
     assert reader.by_rules("split this 7 ways by dish").split_mode == "items"
-    assert reader.by_rules("split this").split_mode == "unsure"
+    assert reader.by_rules("split this").split_mode == "items"
     assert reader.by_rules("split 4 ways").split_mode == "even"
 
 
@@ -309,3 +309,35 @@ async def test_dashboard_routes():
     await router.handle(text("my dashboard"), FakeTransport())
     await router.handle(button("plan:web"), FakeTransport())
     assert dash.pages == ["me", "me", "plan"] and llm.structured_calls == []
+
+
+# a friend arriving with a claim code gets the bill, not the welcome
+async def test_claims_skip_welcome():
+    plans = FakePlans()
+    router = build(FakeLLM(), plans=plans)
+    await router.handle(text("CLAIM 7RUKTW"), FakeTransport())
+    await router.handle(button("claim:pick:7RUKTW:3"), FakeTransport())
+    assert "welcome_if_new" not in plans.calls
+    await router.handle(text("/help"), FakeTransport())
+    assert plans.calls == ["welcome_if_new"]
+
+
+# bare numbers are claims only while a bill is open in the chat
+async def test_bare_numbers_claim():
+    claims = fakes.FakeClaims()
+    llm = FakeLLM({"read_message": said("unclear")})
+    router = build(llm, claims=claims)
+    await router.handle(text("2, 6"), FakeTransport())
+    assert claims.calls == []
+    claims.open = True
+    await router.handle(text("2, 6"), FakeTransport())
+    await router.handle(text("1 and 3"), FakeTransport())
+    assert claims.calls == ["numbers 2, 6", "numbers 1 and 3"]
+
+
+# the button under a you owe message lists everything owed without the model
+async def test_owe_all_button():
+    assistant = FakeAssistant()
+    llm = FakeLLM()
+    await build(llm, assistant=assistant).handle(button("owe:all"), FakeTransport())
+    assert assistant.asked == ["owed"] and llm.structured_calls == []

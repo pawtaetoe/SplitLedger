@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
@@ -102,10 +103,47 @@ async def test_close_by_buttons(sessions):
     assert ask.startswith("*Nobody claimed Pasta, Calamari*")
     rest = buttons[1][0]
     await group.on_button(Inbound("m3", PAYER, "button", button_id=rest), rest, transport)
-    sent = dict((to, body) for to, body in transport.sent_text[-2:])
-    assert sent[PAYER].startswith("*Bill closed · Bill*\nYou paid SGD 70.00.")
-    assert "- Anna *SGD 24.14*" in sent[PAYER]
-    assert sent[ANNA].startswith("*You owe Tommy SGD 24.14*")
+    payer_text = transport.sent_text[-1]
+    assert payer_text[0] == PAYER
+    assert payer_text[1].startswith("*Bill closed · Bill*\nYou paid SGD 70.00.")
+    assert "- Anna *SGD 24.14*" in payer_text[1]
+    to, owe, buttons = transport.sent_buttons[-1]
+    assert to == ANNA and owe.startswith("*You owe Tommy SGD 24.14*")
+    assert buttons == [bill_module.OWE_ALL]
     async with sessions() as session:
         people = (await session.execute(select(func.count()).select_from(Participant))).scalar_one()
     assert people == 2
+
+
+# a fully claimed bill waits 15 quiet minutes, the payer may close sooner, then it closes itself
+async def test_closes_when_all_claimed(sessions):
+    bill, _, _ = await claimed(sessions)
+    logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
+    group = GroupBills(sessions, logger, GLOBAL, ClaimTokens("s"), "https://sl.test", "1")
+    transport = FakeTransport()
+    now = datetime.now(UTC)
+    assert await group.nudge(transport, now) == 1
+    to, text, buttons = transport.sent_buttons[-1]
+    assert to == PAYER and text.startswith("*Everyone's in · Your bill*\nI'll close it in 15")
+    assert buttons == [(f"bill:close:{bill.code}", "Close the bill")]
+    assert transport.sent_text == []
+    assert await group.nudge(transport, now + timedelta(minutes=5)) == 0
+    assert await group.nudge(transport, now + timedelta(minutes=16)) == 1
+    sent = dict(transport.sent_text) | {to: body for to, body, _ in transport.sent_buttons[1:]}
+    assert sent[PAYER].startswith("*Bill closed · Bill*\nEveryone has claimed, so I closed it.")
+    assert sent[ANNA].startswith("*You owe Tommy SGD 24.14*")
+    assert await group.nudge(transport, now + timedelta(minutes=30)) == 0
+
+
+# a bill left half claimed for a day gets one reminder saying what is missing
+async def test_nudge_after_a_day(sessions):
+    bill, items, _ = await seed(sessions)
+    book = ClaimBook(sessions)
+    anna = await book.join(bill.id, "Anna")
+    await book.claim(bill.id, anna, items[0].id, "mine")
+    logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
+    group = GroupBills(sessions, logger, GLOBAL, ClaimTokens("s"), "https://sl.test", "1")
+    transport = FakeTransport()
+    assert await group.nudge(transport, datetime.now(UTC)) == 0
+    assert await group.nudge(transport, datetime.now(UTC) + timedelta(hours=25)) == 1
+    assert "2 of 3 items are still unclaimed." in transport.sent_buttons[-1][1]

@@ -10,10 +10,10 @@ from splitledger.channels.simulator import dev_router
 from splitledger.channels.twilio import twilio_router
 from splitledger.channels.whatsapp import whatsapp_router
 from splitledger.contracts.transport import Transport
-from splitledger.handlers.router import bills
+from splitledger.handlers.router import bills, group
 from splitledger.jobs.reminders import reminder_loop
 from splitledger.settings import settings
-from splitledger.web.claim import claim_router
+from splitledger.web.claim import claim_page, claim_router
 from splitledger.web.dashboard import dashboard_router
 from splitledger.web.plan import plan_router
 
@@ -26,12 +26,13 @@ TWILIO = settings.whatsapp_provider == "twilio"
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     transport: Transport = twilio.transport if TWILIO else whatsapp.channel.transport
-    task = asyncio.create_task(reminder_loop(bills, transport))
+    task = asyncio.create_task(reminder_loop(bills, group, transport))
     yield
     task.cancel()
 
 
 app = FastAPI(title="SplitLedger", lifespan=lifespan)
+claim_page.attach(group, twilio.transport if TWILIO else whatsapp.channel.transport)
 app.include_router(twilio_router if TWILIO else whatsapp_router)
 app.include_router(claim_router)
 app.include_router(dashboard_router)

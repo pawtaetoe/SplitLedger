@@ -24,10 +24,22 @@ def tap(user: str, button_id: str) -> Inbound:
     return Inbound("m1", user, "button", button_id=button_id)
 
 
+# bill links sent, by code
+class FakeLinks:
+    # none yet
+    def __init__(self) -> None:
+        self.bills: list[str] = []
+
+    # one bill link
+    async def bill_url(self, inbound, code: str) -> str:
+        self.bills.append(code)
+        return f"https://sl.test/b/{code}/token"
+
+
 # a claim chat with an optional canned reading of plain words
-def chat(sessions, reading: ClaimMap | None = None) -> ClaimChat:
+def chat(sessions, reading: ClaimMap | None = None, links=None) -> ClaimChat:
     llm = FakeLLM({"map_claim": reading} if reading else {})
-    return ClaimChat(sessions, llm, ClaimBook(sessions), GLOBAL)
+    return ClaimChat(sessions, llm, ClaimBook(sessions), GLOBAL, links)
 
 
 # a wrong code says so, the code alone lists items with the free ones as buttons
@@ -125,3 +137,29 @@ async def test_quiet_caption(sessions):
         text(PAYER, "split with the team"), "split with the team", transport, "K7Q2AB", quiet=True
     )
     assert transport.sent_text == [] and transport.sent_buttons == []
+
+
+# the list also carries the person's own link to the bill page
+async def test_code_sends_bill_link(sessions):
+    await seed(sessions)
+    links = FakeLinks()
+    transport = FakeTransport()
+    await chat(sessions, links=links).by_code(
+        text(ANNA, "CLAIM K7Q2AB", "Anna"), "CLAIM K7Q2AB", transport
+    )
+    assert links.bills == ["K7Q2AB"]
+    page = "Or tick them on a page:\nhttps://sl.test/b/K7Q2AB/token"
+    assert transport.sent_buttons[-1][1].endswith(page)
+
+
+# after the list, bare numbers claim on that bill without the code
+async def test_bare_numbers(sessions):
+    await seed(sessions)
+    claims = chat(sessions)
+    transport = FakeTransport()
+    assert not claims.has_bill(ANNA)
+    await claims.by_code(text(ANNA, "CLAIM K7Q2AB", "Anna"), "CLAIM K7Q2AB", transport)
+    assert claims.has_bill(ANNA)
+    await claims.numbers(text(ANNA, "1, 3", "Anna"), "1, 3", transport)
+    async with sessions() as session:
+        assert len((await session.execute(select(ItemClaim))).all()) == 2

@@ -1,0 +1,12 @@
+{
+  "intent": "log",
+  "expense": {
+    "amount_cents": 2500,
+    "currency": null,
+    "category": "Dining",
+    "vendor": null,
+    "note": "lunch with the team"
+  },
+  "ways": null,
+  "split_mode": null
+}

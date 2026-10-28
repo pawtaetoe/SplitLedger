@@ -13,6 +13,7 @@ from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import Bill, User
+from splitledger.handlers.dashboard import DashboardLink
 from splitledger.handlers.log import ensure_user, money
 from splitledger.llm.schemas import ClaimMap, Locale
 from splitledger.split.claims import CLOSED, BillView, ClaimBook, Line
@@ -28,6 +29,8 @@ MODEL_TIMEOUT = 15.0
 RECENT_DAYS = 7
 # item buttons shown at most, more would become a numbered menu that clashes with item numbers
 MAX_CHOICES = 3
+# minutes bare numbers still count as claims on the bill just opened
+CONTEXT_MINUTES = 30
 UNKNOWN = "*I can't find bill {}*\nCheck the code in the bill message, like _CLAIM K7Q2AB_."
 NO_BILL = "*Which bill?*\nSend _CLAIM_ and the code from the bill message, like _CLAIM K7Q2AB_."
 NO_MATCH = "*I couldn't match that to the bill*\nReply with item numbers, like _CLAIM {} 1,3_."
@@ -53,17 +56,19 @@ def portion_text(name: str, weight: float) -> str:
 # items claimed in the chat, by code and number or in plain words with a check first
 class ClaimChat:
     # sessions, the model for plain words, the claims store and the locale for new users
+    # links sends each person their own signed link to the bill page
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], llm: LLM, book: ClaimBook,
-        locale: Locale
+        locale: Locale, links: DashboardLink | None = None
     ) -> None:
+        self._links = links
         self._sessions = sessions
         self._llm = llm
         self._book = book
         self._locale = locale
         self._drafts: dict[str, Draft] = {}
         # the bill each user last opened, so plain words know which bill
-        self._context: dict[str, str] = {}
+        self._context: dict[str, tuple[str, datetime]] = {}
 
     # claim and a code lists the items, with numbers it claims them
     async def by_code(self, inbound: Inbound, text: str, transport: Transport) -> None:
@@ -76,19 +81,37 @@ class ClaimChat:
         if bill is None:
             await transport.send_text(inbound.user_id, UNKNOWN.format(code))
             return
-        self._context[inbound.user_id] = bill.code
+        self._remember(inbound.user_id, bill.code)
         me = await self._me(inbound, bill)
         view = await self._view(bill, me)
         if bill.even_ways:
             share = money(view.share, bill.currency)
             await transport.send_text(
-                inbound.user_id, f"*You're in · {share}*\nSplit evenly {bill.even_ways} ways."
+                inbound.user_id,
+                f"*You're in · {share}*\nSplit evenly {bill.even_ways} ways. "
+                "You'll get a message when the bill is closed."
             )
             return
         numbers = [int(n) for n in re.findall(r"\d+", rest)]
         if not numbers:
-            await self._list(inbound, transport, view)
+            link = await self._links.bill_url(inbound, bill.code) if self._links else None
+            await self._list(inbound, transport, view, link)
             return
+        await self._claim_numbers(inbound, transport, view, numbers)
+
+    # true while the user has a bill open in this chat, so bare numbers are claims
+    def has_bill(self, wa_user_id: str) -> bool:
+        return self._recent(wa_user_id) is not None
+
+    # bare numbers like 2, 6 claim on the bill last opened in this chat
+    async def numbers(self, inbound: Inbound, text: str, transport: Transport) -> None:
+        code = self._recent(inbound.user_id)
+        bill = await self._book.open_bill(code) if code else None
+        if bill is None:
+            await transport.send_text(inbound.user_id, NO_BILL)
+            return
+        view = await self._view(bill, await self._me(inbound, bill))
+        numbers = [int(n) for n in re.findall(r"\d+", text)]
         await self._claim_numbers(inbound, transport, view, numbers)
 
     # read who had what from plain words, then show everyone's share before saving
@@ -101,7 +124,7 @@ class ClaimChat:
         if bill is None:
             await transport.send_text(inbound.user_id, NO_BILL)
             return
-        self._context[inbound.user_id] = bill.code
+        self._remember(inbound.user_id, bill.code)
         view = await self._view(bill, None)
         listing = "\n".join(
             f"{n}. {line.name}{f' x{line.qty}' if line.qty > 1 else ''}"
@@ -148,8 +171,21 @@ class ClaimChat:
             return
         await self._save(inbound, transport, draft)
 
+    # remember which bill this user is claiming on
+    def _remember(self, wa_user_id: str, code: str) -> None:
+        self._context[wa_user_id] = (code, datetime.now(UTC))
+
+    # the bill this user opened in the last half hour, none after that
+    def _recent(self, wa_user_id: str) -> str | None:
+        found = self._context.get(wa_user_id)
+        if found is None or datetime.now(UTC) - found[1] > timedelta(minutes=CONTEXT_MINUTES):
+            return None
+        return found[0]
+
     # the bill with who has each item, the free items as buttons
-    async def _list(self, inbound: Inbound, transport: Transport, view: BillView) -> None:
+    async def _list(
+        self, inbound: Inbound, transport: Transport, view: BillView, link: str | None = None
+    ) -> None:
         bill = view.bill
         lines = [
             f"{n}. {line.name} · {money(line.price, bill.currency)}"
@@ -159,8 +195,9 @@ class ClaimChat:
         title = f"*{bill.vendor or 'Bill'} · code {bill.code}*"
         text = (
             f"{title}\n" + "\n".join(lines)
-            + f"\n\nTap what you had, or reply with numbers like _CLAIM {bill.code} 1,3_.\n"
-            "Shared something? Say it in words, like _I shared the calamari with Anna_."
+            + "\n\n*Reply with the numbers you had*, like _2, 6_.\n"
+            "Shared something? Say it, like _I shared the calamari with Anna_."
+            + (f"\n\nOr tick them on a page:\n{link}" if link else "")
         )
         free = [(n, line) for n, line in enumerate(view.lines, 1) if not line.holders]
         buttons = [(f"claim:pick:{bill.code}:{n}", f"{n}. {line.name}"[:24]) for n, line in free]
@@ -305,7 +342,7 @@ class ClaimChat:
 
     # the bill last opened in this chat, else the sender's latest bill as payer
     async def _bill_for(self, inbound: Inbound) -> Bill | None:
-        code = self._context.get(inbound.user_id)
+        code = self._recent(inbound.user_id)
         bill = await self._book.open_bill(code) if code else None
         if bill is not None:
             return bill

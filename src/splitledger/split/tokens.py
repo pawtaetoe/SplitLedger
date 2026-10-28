@@ -50,24 +50,26 @@ class ClaimTokens:
 
 # signed sign in values with an expiry, a short link from the chat then a longer cookie
 class LoginLinks:
-    # the signer and how long a value lasts
-    def __init__(self, tokens: ClaimTokens, seconds: int) -> None:
-        self._tokens = tokens
+    # the signer, how long a value lasts and what it opens, login for everything
+    # or bill-<code> for one bill only
+    def __init__(self, tokens: ClaimTokens, seconds: int, scope: str = "login") -> None:
+        self.tokens = tokens
         self._seconds = seconds
+        self._prefix = f"{scope}:"
 
     # the user id and expiry, signed
     def make(self, user_id: str, now: datetime) -> str:
-        return self._tokens.seal(f"login:{user_id}.{int(now.timestamp()) + self._seconds}")
+        return self.tokens.seal(f"{self._prefix}{user_id}.{int(now.timestamp()) + self._seconds}")
 
     # the user id when the value is genuine and not expired, else none
     def read(self, value: str, now: datetime) -> str | None:
         try:
-            body = self._tokens.unseal(value)
+            body = self.tokens.unseal(value)
         except RuntimeError:
             return None
-        if body is None or not body.startswith("login:"):
+        if body is None or not body.startswith(self._prefix):
             return None
-        user_id, _, expires = body.removeprefix("login:").rpartition(".")
+        user_id, _, expires = body.removeprefix(self._prefix).rpartition(".")
         if not expires.isdigit() or int(expires) < now.timestamp():
             return None
         return user_id or None

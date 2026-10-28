@@ -8,8 +8,11 @@
 {% include "_style.html" %}
 </head>
 <body>
-<main id="bill">
-{% include "claim_bill.html" %}
+<main>
+  {% if back %}<a class="back" href="{{ back }}">‹ Back to my bills</a>{% endif %}
+  <div id="bill">
+  {% include "claim_bill.html" %}
+  </div>
 </main>
 </body>
 </html>

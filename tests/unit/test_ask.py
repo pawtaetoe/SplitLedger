@@ -51,7 +51,7 @@ async def test_guarded_returns_error():
 def test_tools_have_schemas():
     tools = SpendTools(None, None, SG, None, []).tools()
     assert [tool.name for tool in tools] == [
-        "sum_spend", "top_expenses", "list_expenses", "who_owes_me", "plan_status",
+        "sum_spend", "top_expenses", "list_expenses", "balances", "plan_status",
         "can_afford", "add_upcoming", "list_upcoming", "remove_upcoming"
     ]
     for tool in tools[:3]:

@@ -55,7 +55,8 @@ def test_forward_text():
     assert text.startswith("*Jumbo · SGD 118.80*\n")
     assert "1. Chilli crab · SGD 80.00\n2. Beer x2 · SGD 20.00" in text
     assert "Service, tax and discounts: SGD 18.80" in text
-    assert text.endswith("*Or in WhatsApp*\nhttps://wa.me/1?text=CLAIM%20K7Q2AB")
+    assert "*Claim in WhatsApp*\nhttps://wa.me/1?text=CLAIM%20K7Q2AB" in text
+    assert text.endswith("*See the bill*\nhttps://x/c/t")
 
 
 # friends pay the same and the payer covers the odd cents

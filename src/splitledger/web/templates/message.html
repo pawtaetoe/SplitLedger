@@ -10,6 +10,7 @@
 <main>
   <h1>{{ title }}</h1>
   <p>{{ body }}</p>
+  {% if action %}<a class="button on" href="{{ action }}">{{ action_label }}</a>{% endif %}
 </main>
 </body>
 </html>

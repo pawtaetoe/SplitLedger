@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.db.models import Budget, BudgetPlan, LedgerEntry, LedgerKind, User
 from splitledger.handlers.log import money
+from splitledger.split.fx import RateSource, convert
 
 # alert once at each of these shares of a bucket
 THRESHOLDS = (80, 100)
@@ -84,9 +85,12 @@ class PlanReport:
 
 # reads plans and spending to give quotas, lines after a log and alerts
 class QuotaBook:
-    # sessions for plan and ledger reads
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    # sessions for plan and ledger reads, rates so spending abroad counts too
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], rates: RateSource | None = None
+    ) -> None:
         self._sessions = sessions
+        self._rates = rates
 
     # this period for every bucket, none without a plan or income
     async def report(self, user_id: uuid.UUID) -> PlanReport | None:
@@ -150,21 +154,26 @@ class QuotaBook:
     ) -> dict[str, int]:
         start = datetime.combine(period_start(today, plan.period), time(), ZoneInfo(user.timezone))
         query = (
-            select(LedgerEntry.category, func.sum(LedgerEntry.amount_cents))
+            select(LedgerEntry.category, LedgerEntry.currency, func.sum(LedgerEntry.amount_cents))
             .where(
                 LedgerEntry.user_id == user.id,
                 LedgerEntry.kind == LedgerKind.EXPENSE,
                 LedgerEntry.voided_at.is_(None),
-                LedgerEntry.currency == user.currency,
                 LedgerEntry.occurred_at >= start
             )
-            .group_by(LedgerEntry.category)
+            .group_by(LedgerEntry.category, LedgerEntry.currency)
         )
+        rows = (await session.execute(query)).all()
+        rates = {user.currency: 1.0}
+        # rates are only fetched when something was spent in another currency
+        if self._rates is not None and any(code != user.currency for _, code, _ in rows):
+            rates = await self._rates.to(user.currency)
         totals: dict[str, int] = {}
-        for category, cents in (await session.execute(query)).all():
+        for category, code, cents in rows:
             bucket = plan.category_map.get(category or "Other")
-            if bucket is not None:
-                totals[bucket] = totals.get(bucket, 0) + int(cents)
+            value = convert(int(cents), code, rates)
+            if bucket is not None and value is not None:
+                totals[bucket] = totals.get(bucket, 0) + value
         return totals
 
     # record the threshold, true only the first time it is reached this period
