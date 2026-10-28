@@ -13,10 +13,8 @@ from fastapi.testclient import TestClient
 import splitledger.channels.twilio as twilio
 from splitledger.channels.whatsapp import WhatsAppChannel
 from splitledger.contracts.messages import Inbound
-from splitledger.handlers.router import MessageReader, Router
-from splitledger.llm.schemas import GLOBAL
 from splitledger.settings import settings
-from tests.fakes import FakeAssistant, FakeBills, FakeGroup, FakeLLM, FakeLogger, FakePlans
+from tests.fakes.router import fake_router
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "twilio"
 TOKEN = "test-token"
@@ -49,11 +47,7 @@ def make_client() -> TestClient:
 # swap in a real twilio transport with in memory dedupe
 def use_twilio_channel(monkeypatch) -> twilio.TwilioTransport:
     transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
-    reader = MessageReader(FakeLLM(), GLOBAL)
-    router = Router(
-        FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills(), FakeGroup()
-    )
-    channel = WhatsAppChannel(transport, router)
+    channel = WhatsAppChannel(transport, fake_router())
     seen: set[str] = set()
 
     async def claim(message_id: str) -> bool:
@@ -85,6 +79,8 @@ def test_parse_fixtures():
     )
     reply = twilio.parse_inbound(load("reply.json"))
     assert reply == Inbound("SMreply1", "6581234567", "button", text="Save", button_id="save")
+    named = twilio.parse_inbound({**load("text.json"), "ProfileName": "Tommy"})
+    assert named is not None and named.name == "Tommy"
 
 
 # a form with no sid or sender is ignored

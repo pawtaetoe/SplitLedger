@@ -1,0 +1,11 @@
+{
+  "intent": "log",
+  "expense": {
+    "amount_cents": 120000,
+    "currency": "JPY",
+    "category": "Dining",
+    "vendor": null,
+    "note": "\u663c\u3054\u306f\u3093"
+  },
+  "ways": null
+}

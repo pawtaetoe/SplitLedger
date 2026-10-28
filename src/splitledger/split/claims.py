@@ -1,5 +1,6 @@
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from fractions import Fraction
 
 from sqlalchemy import delete, func, select
@@ -115,7 +116,8 @@ class ClaimBook:
 
     # mine claims alone, share joins whoever has it, drop lets go, a message when refused
     async def claim(
-        self, bill_id: uuid.UUID, me: uuid.UUID, item_id: uuid.UUID, action: str
+        self, bill_id: uuid.UUID, me: uuid.UUID, item_id: uuid.UUID, action: str,
+        weight: float = 1.0
     ) -> str | None:
         if action not in ACTIONS:
             raise ValueError(f"action must be one of {', '.join(ACTIONS)}")
@@ -147,6 +149,88 @@ class ClaimBook:
             others = [name for name, holder in holders if holder != me]
             if action == "mine" and others:
                 return TAKEN.format(others[0])
-            session.add(ItemClaim(bill_item_id=item_id, participant_id=me))
+            session.add(ItemClaim(bill_item_id=item_id, participant_id=me, weight=weight))
             await session.commit()
         return None
+
+    # the open bill with this code, none when unknown or closed
+    async def open_bill(self, code: str) -> Bill | None:
+        query = select(Bill).where(func.upper(Bill.code) == code.upper())
+        async with self._sessions() as session:
+            bill = (await session.execute(query)).scalar_one_or_none()
+        return bill if bill is not None and bill.status == BillStatus.OPEN else None
+
+    # the payer's latest open bill from the last few days, for claims sent without a code
+    async def latest_paid_by(self, user_id: uuid.UUID, since: datetime) -> Bill | None:
+        query = (
+            select(Bill)
+            .where(
+                Bill.payer_id == user_id, Bill.status == BillStatus.OPEN, Bill.created_at >= since
+            )
+            .order_by(Bill.created_at.desc())
+            .limit(1)
+        )
+        async with self._sessions() as session:
+            return (await session.execute(query)).scalar_one_or_none()
+
+    # the user's person on a bill, linking a guest of the same name or adding one
+    async def person_for(self, bill_id: uuid.UUID, user_id: uuid.UUID, name: str) -> uuid.UUID:
+        async with self._sessions() as session:
+            mine = (await session.execute(
+                select(Participant.id).where(
+                    Participant.bill_id == bill_id, Participant.user_id == user_id
+                )
+            )).scalar_one_or_none()
+            if mine is not None:
+                return mine
+            guest = (await session.execute(
+                select(Participant).where(
+                    Participant.bill_id == bill_id,
+                    Participant.user_id.is_(None),
+                    func.lower(Participant.guest_name) == name.lower()
+                ).limit(1)
+            )).scalar_one_or_none()
+            if guest is None:
+                guest = Participant(id=uuid.uuid4(), bill_id=bill_id, guest_name=name)
+                session.add(guest)
+            guest.user_id = user_id
+            await session.commit()
+            return guest.id
+
+    # save claims as given under the bill lock, replacing the same person and item
+    async def apply(
+        self, bill_id: uuid.UUID, claims: list[tuple[uuid.UUID, uuid.UUID, float]]
+    ) -> bool:
+        async with self._sessions() as session:
+            bill = (await session.execute(
+                select(Bill).where(Bill.id == bill_id).with_for_update()
+            )).scalar_one()
+            if bill.status != BillStatus.OPEN:
+                return False
+            for person, item, weight in claims:
+                await session.execute(delete(ItemClaim).where(
+                    ItemClaim.participant_id == person, ItemClaim.bill_item_id == item
+                ))
+                session.add(ItemClaim(participant_id=person, bill_item_id=item, weight=weight))
+            await session.commit()
+        return True
+
+    # shares if the given claims were added, by person id, new names get stand in ids
+    async def preview(
+        self, bill: Bill, extra: list[tuple[uuid.UUID, uuid.UUID, float]]
+    ) -> dict[uuid.UUID, int]:
+        async with self._sessions() as session:
+            items = list((await session.execute(
+                select(BillItem).where(BillItem.bill_id == bill.id)
+            )).scalars())
+            claims = list((await session.execute(
+                select(ItemClaim).where(ItemClaim.bill_item_id.in_([item.id for item in items]))
+            )).scalars())
+        pairs = {(person, item) for person, item, _ in extra}
+        kept = [c for c in claims if (c.participant_id, c.bill_item_id) not in pairs]
+        added = [
+            ItemClaim(participant_id=person, bill_item_id=item, weight=weight)
+            for person, item, weight in extra
+        ]
+        people = {person for person, _, _ in extra}
+        return {person: preview_share(bill, items, [*kept, *added], person) for person in people}

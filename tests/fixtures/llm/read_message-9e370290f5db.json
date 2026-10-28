@@ -1,0 +1,11 @@
+{
+  "intent": "log",
+  "expense": {
+    "amount_cents": 1830,
+    "currency": null,
+    "category": "Transport",
+    "vendor": "Grab",
+    "note": "ride home"
+  },
+  "ways": null
+}

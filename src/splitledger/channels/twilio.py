@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import uuid
+from dataclasses import replace
 from urllib.parse import parse_qsl
 
 import httpx
@@ -36,6 +37,15 @@ def parse_inbound(params: dict[str, str]) -> Inbound | None:
     if not user_id or not message_id:
         return None
     body = params.get("Body") or None
+    parsed = _parse_kind(params, user_id, message_id, body)
+    name = params.get("ProfileName") or None
+    return replace(parsed, name=name) if parsed is not None else None
+
+
+# the message by kind, button, image, audio or text
+def _parse_kind(
+    params: dict[str, str], user_id: str, message_id: str, body: str | None
+) -> Inbound | None:
     if params.get("ButtonPayload"):
         return Inbound(
             message_id, user_id, "button", text=params.get("ButtonText"),

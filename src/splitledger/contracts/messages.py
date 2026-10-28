@@ -11,3 +11,5 @@ class Inbound:
     text: str | None = None
     media_ref: str | None = None
     button_id: str | None = None
+    # the sender's whatsapp profile name when the channel gives it
+    name: str | None = None

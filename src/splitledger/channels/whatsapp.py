@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -33,10 +34,15 @@ def parse_inbound(payload: dict[str, Any]) -> list[Inbound]:
     inbound: list[Inbound] = []
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
-            for message in change.get("value", {}).get("messages", []):
+            value = change.get("value", {})
+            names = {
+                str(contact.get("wa_id")): contact.get("profile", {}).get("name")
+                for contact in value.get("contacts", [])
+            }
+            for message in value.get("messages", []):
                 parsed = _parse_message(message)
                 if parsed is not None:
-                    inbound.append(parsed)
+                    inbound.append(replace(parsed, name=names.get(parsed.user_id)))
     return inbound
 
 

@@ -12,6 +12,7 @@ from splitledger.db.session import SessionFactory
 from splitledger.handlers.ask import SpendAssistant
 from splitledger.handlers.bill import GroupBills
 from splitledger.handlers.bills import UpcomingBills
+from splitledger.handlers.claim import ClaimChat
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.plan import PlanManager
 from splitledger.llm.client import MetaLLM
@@ -21,6 +22,7 @@ from splitledger.plans.afford import CORE_RULES
 from splitledger.plans.afford_sg import SG_RULES
 from splitledger.plans.quota import QuotaBook
 from splitledger.settings import settings
+from splitledger.split.claims import ClaimBook
 from splitledger.split.tokens import ClaimTokens
 
 LOG = logging.getLogger(__name__)
@@ -67,10 +69,6 @@ HINTS = {
 }
 # typed words that open the menu without asking the model
 MENU_WORDS = frozenset({"menu", "help", "options"})
-# replies for intents whose handlers land in later tasks
-SOON = {
-    "claim": "Claiming items on a bill is coming soon"
-}
 
 
 # lowercase words in a message
@@ -115,10 +113,10 @@ class MessageReader:
 # routes one inbound message, fixed rules for bot formats and the model for language
 class Router:
     # logger for saving, reader for free text, assistant for questions, plans for budgets
-    # bills for what the user expects to pay and group for shared bills
+    # bills for what the user expects to pay, group for shared bills and claims for who had what
     def __init__(
         self, logger: ExpenseLogger, reader: MessageReader, assistant: SpendAssistant,
-        plans: PlanManager, bills: UpcomingBills, group: GroupBills
+        plans: PlanManager, bills: UpcomingBills, group: GroupBills, claims: ClaimChat
     ) -> None:
         self._logger = logger
         self._reader = reader
@@ -126,6 +124,7 @@ class Router:
         self._plans = plans
         self._bills = bills
         self._group = group
+        self._claims = claims
 
     # greet new users, then pick the handler for this message
     async def handle(self, inbound: Inbound, transport: Transport) -> None:
@@ -158,6 +157,9 @@ class Router:
             return
         if button_id.startswith("bills:"):
             await self._bills.on_button(inbound, button_id, transport)
+            return
+        if button_id.startswith("claim:"):
+            await self._claims.on_button(inbound, button_id, transport)
             return
         if button_id.startswith("menu:"):
             await self._menu_choice(inbound, button_id, transport)
@@ -201,7 +203,7 @@ class Router:
             await self.menu(inbound, transport)
             return
         if CLAIM.match(text):
-            await transport.send_text(inbound.user_id, SOON["claim"])
+            await self._claims.by_code(inbound, text, transport)
             return
         result = await self._reader.read(text)
         if result.intent == "log":
@@ -223,8 +225,8 @@ class Router:
         if result.intent == "split":
             await transport.send_text(inbound.user_id, SPLIT_HINT)
             return
-        if result.intent in SOON:
-            await transport.send_text(inbound.user_id, SOON[result.intent])
+        if result.intent == "claim":
+            await self._claims.free_text(inbound, text, transport)
             return
         await self.menu(inbound, transport, UNCLEAR)
 
@@ -266,5 +268,6 @@ message_router = Router(
     SpendAssistant(llm, SessionFactory, book, AFFORD_RULES[settings.locale]),
     PlanManager(SessionFactory, book, locale, llm),
     bills,
-    group
+    group,
+    ClaimChat(SessionFactory, llm, ClaimBook(SessionFactory), locale)
 )

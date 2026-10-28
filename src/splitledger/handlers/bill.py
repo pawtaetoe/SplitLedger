@@ -182,6 +182,8 @@ class GroupBills:
             async with self._sessions() as session:
                 user_id, _ = await ensure_user(session, inbound.user_id, self._locale)
                 payer = await session.get(User, user_id)
+                if payer is not None and not payer.display_name and inbound.name:
+                    payer.display_name = inbound.name
                 bill = Bill(
                     id=uuid.uuid4(), code=new_code(), payer_id=user_id, vendor=receipt.vendor,
                     currency=receipt.currency or self._locale.currency,

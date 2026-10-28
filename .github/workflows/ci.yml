@@ -7,6 +7,21 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # the integration tests need the same postgres as docker compose
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: splitledger
+          POSTGRES_PASSWORD: splitledger
+          POSTGRES_DB: splitledger
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U splitledger"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3

@@ -112,6 +112,23 @@ class ExpenseDraft(BaseModel):
     note: str | None = None
 
 
+# one item someone had, portion is the part they had when they say so
+class ClaimPart(BaseModel):
+    item: int
+    portion: float | None = None
+
+
+# the items one person had, name none means the sender
+class PersonClaims(BaseModel):
+    name: str | None = None
+    items: list[ClaimPart] = []
+
+
+# who had what on a bill, read from a chat message
+class ClaimMap(BaseModel):
+    people: list[PersonClaims] = []
+
+
 # what a free text message wants plus the expense when it is one
 class MessageResult(BaseModel):
     intent: Literal["log", "ask", "upcoming", "plan", "split", "claim", "chat", "unclear"]

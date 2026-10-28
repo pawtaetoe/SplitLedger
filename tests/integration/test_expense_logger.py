@@ -3,9 +3,9 @@ from sqlalchemy import func, select
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, User
 from splitledger.handlers.log import ExpenseLogger, quick_parse
-from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
-from tests.fakes import FakeAssistant, FakeBills, FakeGroup, FakeLLM, FakePlans, FakeTransport
+from tests.fakes import FakeLLM, FakeTransport
+from tests.fakes.router import fake_router
 
 
 # one text message from a user
@@ -103,8 +103,7 @@ async def test_voice_note_logged(sessions):
     llm = FakeLLM()
     llm.transcript = "Just spent 45 on petrol at Shell"
     logger = ExpenseLogger(llm, sessions, GLOBAL)
-    reader = MessageReader(llm, GLOBAL)
-    router = Router(logger, reader, FakeAssistant(), FakePlans(), FakeBills(), FakeGroup())
+    router = fake_router(llm, logger=logger)
     await router.handle(Inbound("m1", "6581234567", "audio", media_ref="note-1"), transport)
     assert transport.sent_text == [("6581234567", "*I heard*\n> Just spent 45 on petrol at Shell")]
     assert transport.sent_buttons[0][1].startswith("✅ *Logged USD 45.00*\nTransport")

@@ -45,5 +45,7 @@
   {"text": "spotify 10.98 monthly", "intent": "upcoming"},
   {"text": "what bills are coming up?", "intent": "upcoming"},
   {"text": "split the overall charge evenly among 4 pax", "intent": "split", "ways": 4},
-  {"text": "split this with the team", "intent": "split"}
+  {"text": "split this with the team", "intent": "split"},
+  {"text": "Anna and Ben shared the calamari, I had the pasta", "intent": "claim"},
+  {"text": "I had the laksa and half the beer", "intent": "claim"}
 ]

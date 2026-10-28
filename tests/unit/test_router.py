@@ -5,7 +5,7 @@ import pytest
 import splitledger.handlers.router as router_module
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerSource
-from splitledger.handlers.router import HELP, SOON, UNCLEAR, MessageReader, Router
+from splitledger.handlers.router import HELP, UNCLEAR, MessageReader, Router
 from splitledger.llm.schemas import ExpenseDraft, MessageResult
 from splitledger.llm.schemas_sg import SG
 from tests import fakes
@@ -41,19 +41,25 @@ def said(intent: str, cents: int | None = None) -> MessageResult:
 
 
 # a router with fakes for every handler not given
-def build(llm: FakeLLM, logger=None, assistant=None, plans=None, bills=None, group=None) -> Router:
+def build(
+    llm: FakeLLM, logger=None, assistant=None, plans=None, bills=None, group=None, claims=None
+) -> Router:
     return Router(
         logger or FakeLogger(), MessageReader(llm, SG), assistant or FakeAssistant(),
-        plans or FakePlans(), bills or FakeBills(), group or fakes.FakeGroup()
+        plans or FakePlans(), bills or FakeBills(), group or fakes.FakeGroup(),
+        claims or fakes.FakeClaims()
     )
 
 
 # name the handler a message reached from the fakes or the reply text
 def landed(
-    logger: FakeLogger, transport: FakeTransport, assistant: FakeAssistant, group: fakes.FakeGroup
+    logger: FakeLogger, transport: FakeTransport, assistant: FakeAssistant,
+    group: fakes.FakeGroup, claims: fakes.FakeClaims
 ) -> str:
     if assistant.asked:
         return "ask"
+    if claims.calls:
+        return "claim"
     replies = [reply for _, reply in transport.sent_text]
     replies += [reply for _, reply, _ in transport.sent_buttons]
     if group.calls or router_module.SPLIT_HINT in replies:
@@ -62,9 +68,6 @@ def landed(
         return "help"
     if UNCLEAR in replies:
         return "unclear"
-    for intent, reply in SOON.items():
-        if reply in replies:
-            return intent
     calls = [call for call in logger.calls if call != "transcribe"]
     return calls[-1] if calls else "echo"
 
@@ -78,8 +81,9 @@ async def route(
     transport = FakeTransport()
     assistant = FakeAssistant()
     group = fakes.FakeGroup()
-    await build(llm, logger, assistant, group=group).handle(inbound, transport)
-    return landed(logger, transport, assistant, group), logger, llm
+    claims = fakes.FakeClaims()
+    await build(llm, logger, assistant, group=group, claims=claims).handle(inbound, transport)
+    return landed(logger, transport, assistant, group, claims), logger, llm
 
 
 # bot formats are handled by rule and never reach the model
@@ -251,3 +255,16 @@ def test_rules_read_ways():
     assert reader.by_rules("split this 3 ways").ways == 3
     assert reader.by_rules("split among 5 pax").ways == 5
     assert reader.by_rules("split this").ways is None
+
+
+# claim codes, claim buttons and claims in words reach the claim chat
+async def test_claim_routes():
+    claims = fakes.FakeClaims()
+    llm = FakeLLM({"read_message": said("claim")})
+    router = build(llm, claims=claims)
+    await router.handle(text("CLAIM K7Q2AB 1,3"), FakeTransport())
+    await router.handle(button("claim:ok"), FakeTransport())
+    await router.handle(text("Anna and Ben shared the calamari"), FakeTransport())
+    assert claims.calls == [
+        "code CLAIM K7Q2AB 1,3", "button claim:ok", "words Anna and Ben shared the calamari"
+    ]

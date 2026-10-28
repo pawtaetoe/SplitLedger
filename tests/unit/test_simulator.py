@@ -1,19 +1,13 @@
 from fastapi.testclient import TestClient
 
 from splitledger.channels.simulator import simulator
-from splitledger.handlers.router import MessageReader, Router
-from splitledger.llm.schemas import GLOBAL
 from splitledger.main import app
-from tests.fakes import FakeAssistant, FakeBills, FakeGroup, FakeLLM, FakeLogger, FakePlans
+from tests.fakes.router import fake_router
 
 
 # posting text reaches the router and replies through transport
 def test_simulator_text_echo(monkeypatch):
-    reader = MessageReader(FakeLLM(), GLOBAL)
-    router = Router(
-        FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills(), FakeGroup()
-    )
-    monkeypatch.setattr(simulator, "router", router)
+    monkeypatch.setattr(simulator, "router", fake_router())
     simulator.reset()
     client = TestClient(app)
     response = client.post("/dev/chat/text", json={"user": "alice", "text": "coffee 6.50"})
@@ -34,11 +28,7 @@ def test_simulator_page_served():
 
 # posting an image reaches the router and the same bytes come back
 def test_simulator_image_echo(monkeypatch):
-    reader = MessageReader(FakeLLM(), GLOBAL)
-    router = Router(
-        FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills(), FakeGroup()
-    )
-    monkeypatch.setattr(simulator, "router", router)
+    monkeypatch.setattr(simulator, "router", fake_router())
     simulator.reset()
     client = TestClient(app)
     response = client.post(
@@ -52,7 +42,8 @@ def test_simulator_image_echo(monkeypatch):
 
 
 # clicking a button echoes its id
-def test_simulator_button_echo():
+def test_simulator_button_echo(monkeypatch):
+    monkeypatch.setattr(simulator, "router", fake_router())
     simulator.reset()
     client = TestClient(app)
     response = client.post(
