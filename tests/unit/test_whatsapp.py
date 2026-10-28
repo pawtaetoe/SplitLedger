@@ -10,9 +10,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import splitledger.channels.whatsapp as whatsapp
-from splitledger.handlers.router import Router
+from splitledger.handlers.router import MessageReader, Router
+from splitledger.llm.schemas import GLOBAL
 from splitledger.settings import settings
-from tests.fakes import FakeLogger, FakeTransport
+from tests.fakes import FakeLLM, FakeLogger, FakeTransport
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "whatsapp"
 SECRET = "test-secret"
@@ -56,7 +57,8 @@ def test_verify_signature():
 # swap in a fake channel with in memory dedupe
 def use_fake_channel(monkeypatch) -> FakeTransport:
     fake = FakeTransport()
-    channel = whatsapp.WhatsAppChannel(fake, Router(FakeLogger()))
+    router = Router(FakeLogger(), MessageReader(FakeLLM(), GLOBAL))
+    channel = whatsapp.WhatsAppChannel(fake, router)
     seen: set[str] = set()
 
     async def claim(message_id: str) -> bool:

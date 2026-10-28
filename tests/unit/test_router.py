@@ -1,0 +1,164 @@
+import asyncio
+
+import pytest
+
+import splitledger.handlers.router as router_module
+from splitledger.contracts.messages import Inbound
+from splitledger.db.models import LedgerSource
+from splitledger.handlers.router import HELP, SOON, UNCLEAR, MessageReader, Router
+from splitledger.llm.schemas import ExpenseDraft, MessageResult
+from splitledger.llm.schemas_sg import SG
+from tests.fakes import FakeLLM, FakeLogger, FakeTransport
+
+USER = "6581234567"
+
+
+# one text message
+def text(body: str) -> Inbound:
+    return Inbound("m1", USER, "text", text=body)
+
+
+# one button tap
+def button(button_id: str) -> Inbound:
+    return Inbound("m1", USER, "button", button_id=button_id)
+
+
+# one photo with an optional caption
+def image(caption: str | None) -> Inbound:
+    return Inbound("m1", USER, "image", text=caption, media_ref="photo-1")
+
+
+# one voice note with an optional media reference
+def audio(media_ref: str | None) -> Inbound:
+    return Inbound("m1", USER, "audio", media_ref=media_ref)
+
+
+# a model reply for one intent
+def said(intent: str, cents: int | None = None) -> MessageResult:
+    expense = ExpenseDraft(amount_cents=cents, category="Dining") if cents else None
+    return MessageResult(intent=intent, expense=expense)
+
+
+# name the handler a message reached from the reply text or the fake logger
+def landed(logger: FakeLogger, transport: FakeTransport) -> str:
+    replies = [reply for _, reply in transport.sent_text]
+    if HELP in replies:
+        return "help"
+    if UNCLEAR in replies:
+        return "unclear"
+    for intent, reply in SOON.items():
+        if reply in replies:
+            return intent
+    calls = [call for call in logger.calls if call != "transcribe"]
+    return calls[-1] if calls else "echo"
+
+
+# route one message with a fake logger and an optional canned model reply
+async def route(
+    inbound: Inbound, reply: MessageResult | None
+) -> tuple[FakeLogger, FakeTransport, FakeLLM]:
+    llm = FakeLLM({"read_message": reply} if reply else {})
+    logger = FakeLogger()
+    transport = FakeTransport()
+    await Router(logger, MessageReader(llm, SG)).handle(inbound, transport)
+    return logger, transport, llm
+
+
+# bot formats are handled by rule and never reach the model
+PROTOCOL_ROWS = [
+    (text("/help"), "help"),
+    (text("/HELP"), "help"),
+    (text("/undo"), "undo_last"),
+    (text("/budget 600"), "help"),
+    (text("CLAIM K7Q2"), "claim"),
+    (text("claim k7q2 1,3"), "claim"),
+    (button("undo:abc"), "undo"),
+    (button("receipt:k1"), "confirm_receipt"),
+    (button("save"), "echo"),
+    (image(None), "log_receipt"),
+    (audio(None), "echo")
+]
+
+
+@pytest.mark.parametrize(("inbound", "expected"), PROTOCOL_ROWS)
+async def test_protocol_rows(inbound, expected):
+    logger, transport, llm = await route(inbound, None)
+    assert landed(logger, transport) == expected
+    assert llm.structured_calls == []
+
+
+# free text goes to the model once and lands where the model says
+MODEL_ROWS = [
+    (text("lunch with the team, about 25 bucks"), said("log", 2500), "log"),
+    (text("makan 12 just now lah"), said("log", 1200), "log"),
+    (text("I split my phone screen, repair 120"), said("log", 12000), "log"),
+    (text("can I afford a 300 hotel?"), said("ask"), "ask"),
+    (text("let's share dinner four ways"), said("split"), "split"),
+    (text("the laksa was mine"), said("claim"), "claim"),
+    (text("hello"), said("chat"), "help"),
+    (text("asdfgh"), said("unclear"), "unclear"),
+    (image("split this with the team"), said("split"), "split"),
+    (image("lunch"), said("log", 1500), "log_receipt")
+]
+
+
+@pytest.mark.parametrize(("inbound", "reply", "expected"), MODEL_ROWS)
+async def test_model_rows(inbound, reply, expected):
+    logger, transport, llm = await route(inbound, reply)
+    assert landed(logger, transport) == expected
+    assert len(llm.structured_calls) == 1
+
+
+# a log with no amount from the model still reaches the logger to ask for one
+async def test_log_without_expense_asks_logger():
+    logger, _, _ = await route(text("bought stuff"), said("log"))
+    assert logger.drafts[0][0].amount_cents is None
+
+
+# a voice note is transcribed then read like text and saved as voice
+async def test_voice_goes_through_reader():
+    llm = FakeLLM({"read_message": said("log", 4500)})
+    logger = FakeLogger()
+    logger.heard = "spent 45 on petrol"
+    await Router(logger, MessageReader(llm, SG)).handle(audio("note-1"), FakeTransport())
+    assert logger.calls == ["transcribe", "log"]
+    assert logger.drafts[0][1] == LedgerSource.VOICE
+
+
+# a spoken question is answered as a question not logged
+async def test_spoken_question_is_not_logged():
+    llm = FakeLLM({"read_message": said("ask")})
+    logger = FakeLogger()
+    logger.heard = "how much did I spend this week"
+    transport = FakeTransport()
+    await Router(logger, MessageReader(llm, SG)).handle(audio("note-1"), transport)
+    assert landed(logger, transport) == "ask"
+
+
+# when the model fails the keyword rules still route the basics
+FALLBACK_ROWS = [
+    (text("coffee 6.50"), "log"),
+    (text("kopi 1.80"), "log"),
+    (text("split this"), "split"),
+    (text("how much did I spend?"), "ask"),
+    (text("hello"), "unclear")
+]
+
+
+@pytest.mark.parametrize(("inbound", "expected"), FALLBACK_ROWS)
+async def test_fallback_rows(inbound, expected):
+    logger, transport, _ = await route(inbound, None)
+    assert landed(logger, transport) == expected
+
+
+# a slow model is cut off and the rules answer instead
+async def test_slow_model_falls_back(monkeypatch):
+    monkeypatch.setattr(router_module, "MODEL_TIMEOUT", 0.01)
+
+    class SlowLLM(FakeLLM):
+        async def structured(self, prompt, schema, images=()):
+            await asyncio.sleep(1)
+            return await super().structured(prompt, schema, images)
+
+    result = await MessageReader(SlowLLM(), SG).read("coffee 6.50")
+    assert (result.intent, result.expense.amount_cents) == ("log", 650)

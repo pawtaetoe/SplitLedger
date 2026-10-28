@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, User
-from splitledger.handlers.log import ExpenseLogger
+from splitledger.handlers.log import ExpenseLogger, quick_parse
+from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
 from tests.fakes import FakeLLM, FakeTransport
 
@@ -64,6 +65,13 @@ def text(user: str, body: str) -> Inbound:
     return Inbound(f"m-{user}-{body}", user, "text", text=body)
 
 
+# log one message with the draft the rules read from it
+async def log(logger: ExpenseLogger, transport: FakeTransport, user: str, body: str) -> None:
+    draft = quick_parse(body, GLOBAL)
+    assert draft is not None
+    await logger.log(text(user, body), transport, draft)
+
+
 # count rows of one model
 async def count(sessions, model) -> int:
     async with sessions() as session:
@@ -74,8 +82,8 @@ async def count(sessions, model) -> int:
 async def test_log_creates_user_once(sessions):
     transport = FakeTransport()
     logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
-    await logger.log(text("6581234567", "coffee 6.50"), transport)
-    await logger.log(text("6581234567", "uber 14.20"), transport)
+    await log(logger, transport, "6581234567", "coffee 6.50")
+    await log(logger, transport, "6581234567", "uber 14.20")
     assert await count(sessions, User) == 1
     assert await count(sessions, LedgerEntry) == 2
     to, reply, buttons = transport.sent_buttons[0]
@@ -87,7 +95,7 @@ async def test_log_creates_user_once(sessions):
 async def test_undo_voids_once(sessions):
     transport = FakeTransport()
     logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
-    await logger.log(text("6581234567", "coffee 6.50"), transport)
+    await log(logger, transport, "6581234567", "coffee 6.50")
     entry_id = transport.sent_buttons[0][2][0][0].removeprefix("undo:")
     await logger.undo(text("6581234567", "1"), entry_id, transport)
     async with sessions() as session:
@@ -103,7 +111,7 @@ async def test_undo_voids_once(sessions):
 async def test_undo_ignores_other_user(sessions):
     transport = FakeTransport()
     logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
-    await logger.log(text("6581234567", "coffee 6.50"), transport)
+    await log(logger, transport, "6581234567", "coffee 6.50")
     entry_id = transport.sent_buttons[0][2][0][0].removeprefix("undo:")
     await logger.undo(text("6599999999", "1"), entry_id, transport)
     async with sessions() as session:
@@ -115,8 +123,8 @@ async def test_undo_ignores_other_user(sessions):
 # no amount asks for one and writes nothing
 async def test_missing_amount_asks(sessions):
     transport = FakeTransport()
-    llm = FakeLLM({"parse_expense": ExpenseDraft(amount_cents=None)})
-    await ExpenseLogger(llm, sessions, GLOBAL).log(text("6581234567", "bought stuff"), transport)
+    logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
+    await logger.log(text("6581234567", "bought stuff"), transport, ExpenseDraft(amount_cents=None))
     assert await count(sessions, LedgerEntry) == 0
     assert "How much" in transport.sent_text[0][1]
 
@@ -140,14 +148,14 @@ async def test_receipt_saved_once(sessions):
     assert transport.sent_text == [("6581234567", "You already logged this receipt")]
 
 
-# a voice note echoes the transcript and logs a voice expense
+# a voice note echoes the transcript, goes through the router and logs a voice expense
 async def test_voice_note_logged(sessions):
     transport = FakeTransport()
     transport.media["note-1"] = b"OggS" + bytes(2) + (3 * 48000).to_bytes(8, "little")
     llm = FakeLLM()
     llm.transcript = "Just spent 45 on petrol at Shell"
-    logger = ExpenseLogger(llm, sessions, GLOBAL)
-    await logger.log_voice(Inbound("m1", "6581234567", "audio", media_ref="note-1"), transport)
+    router = Router(ExpenseLogger(llm, sessions, GLOBAL), MessageReader(llm, GLOBAL))
+    await router.handle(Inbound("m1", "6581234567", "audio", media_ref="note-1"), transport)
     assert transport.sent_text == [("6581234567", "Heard: Just spent 45 on petrol at Shell")]
     assert transport.sent_buttons[0][1].startswith("Logged USD 45.00 · Transport")
     async with sessions() as session:
@@ -166,3 +174,18 @@ async def test_confirmed_receipt_saved(sessions):
     key = transport.sent_buttons[0][2][0][0].removeprefix("receipt:")
     await logger.confirm_receipt(text("6581234567", "1"), key, transport)
     assert await count(sessions, LedgerEntry) == 1
+
+
+# undo last voids the newest entry first and then the one before
+async def test_undo_last(sessions):
+    transport = FakeTransport()
+    logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
+    await log(logger, transport, "6581234567", "coffee 6.50")
+    await log(logger, transport, "6581234567", "uber 14.20")
+    await logger.undo_last(text("6581234567", "/undo"), transport)
+    async with sessions() as session:
+        rows = (await session.execute(select(LedgerEntry.note, LedgerEntry.voided_at))).all()
+    assert {note for note, voided in rows if voided is not None} == {"uber"}
+    await logger.undo_last(text("6581234567", "/undo"), transport)
+    await logger.undo_last(text("6581234567", "/undo"), transport)
+    assert [reply for _, reply in transport.sent_text] == ["Removed", "Removed", "Nothing to undo"]

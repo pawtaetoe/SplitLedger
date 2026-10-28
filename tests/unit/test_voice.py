@@ -30,7 +30,7 @@ async def test_long_note_rejected():
     transport = FakeTransport()
     transport.media["note-1"] = ogg(61)
     llm = FakeLLM()
-    await logger_for(llm).log_voice(voice(), transport)
+    await logger_for(llm).transcribe(voice(), transport)
     assert "60 seconds" in transport.sent_text[0][1]
     assert llm.transcribed == 0
     assert transport.sent_buttons == []
@@ -41,7 +41,7 @@ async def test_huge_note_rejected():
     transport = FakeTransport()
     transport.media["note-1"] = b"x" * 1_000_001
     llm = FakeLLM()
-    await logger_for(llm).log_voice(voice(), transport)
+    await logger_for(llm).transcribe(voice(), transport)
     assert "60 seconds" in transport.sent_text[0][1]
     assert llm.transcribed == 0
 
@@ -50,6 +50,16 @@ async def test_huge_note_rejected():
 async def test_silent_note_asks_again():
     transport = FakeTransport()
     transport.media["note-1"] = ogg(3)
-    await logger_for(FakeLLM()).log_voice(voice(), transport)
+    await logger_for(FakeLLM()).transcribe(voice(), transport)
     assert "couldn't hear" in transport.sent_text[0][1]
     assert transport.sent_buttons == []
+
+
+# a clear note returns the transcript and echoes it
+async def test_clear_note_returns_transcript():
+    transport = FakeTransport()
+    transport.media["note-1"] = ogg(3)
+    llm = FakeLLM()
+    llm.transcript = " coffee 4.50 "
+    assert await logger_for(llm).transcribe(voice(), transport) == "coffee 4.50"
+    assert transport.sent_text == [("6581234567", "Heard: coffee 4.50")]

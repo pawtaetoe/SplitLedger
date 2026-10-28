@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 Category = Literal[
     "Dining", "Groceries", "Transport", "Shopping", "Bills", "Entertainment", "Health",
@@ -76,7 +76,7 @@ class ReceiptItem(BaseModel):
 # one receipt read from a photo, money in cents
 class ReceiptDraft(BaseModel):
     vendor: str | None = None
-    currency: str | None = None
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     category: Category = "Other"
     items: list[ReceiptItem] = []
     subtotal_cents: int | None = None
@@ -89,7 +89,13 @@ class ReceiptDraft(BaseModel):
 # one expense parsed from a message, currency none means the locale default
 class ExpenseDraft(BaseModel):
     amount_cents: int | None
-    currency: str | None = None
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     category: Category = "Other"
     vendor: str | None = None
     note: str | None = None
+
+
+# what a free text message wants plus the expense when it is one
+class MessageResult(BaseModel):
+    intent: Literal["log", "ask", "split", "claim", "chat", "unclear"]
+    expense: ExpenseDraft | None = None

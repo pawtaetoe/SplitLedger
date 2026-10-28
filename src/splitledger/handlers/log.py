@@ -1,7 +1,6 @@
 import hashlib
 import re
 import uuid
-from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,7 +15,6 @@ from splitledger.db.models import LedgerEntry, LedgerKind, LedgerSource, LedgerS
 from splitledger.llm.schemas import CURRENCY_CODES, ExpenseDraft, Locale, ReceiptDraft
 
 PROMPTS = Path(__file__).parents[1] / "llm" / "prompts"
-PROMPT = (PROMPTS / "parse_expense.md").read_text(encoding="utf-8")
 RECEIPT_PROMPT = f"parse_receipt: {(PROMPTS / 'parse_receipt.md').read_text(encoding='utf-8')}"
 # cents a printed total may be off by before we ask
 TOLERANCE = 5
@@ -26,7 +24,7 @@ MAX_VOICE_BYTES = 1_000_000
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 
 
-# one amount in the locale currency plus a known keyword, else none so the model decides
+# one amount in the locale currency plus a known keyword, else none
 def quick_parse(text: str, locale: Locale) -> ExpenseDraft | None:
     amounts = AMOUNT.findall(text)
     if len(amounts) != 1:
@@ -91,18 +89,11 @@ class ExpenseLogger:
         self._receipts: dict[str, ReceiptDraft] = {}
         self._logged: set[tuple[str, str]] = set()
 
-    # fast path first, then the model
-    async def parse(self, text: str) -> ExpenseDraft:
-        draft = quick_parse(text, self._locale)
-        if draft is not None:
-            return draft
-        return await self._llm.structured(f"parse_expense: {PROMPT}{text}", ExpenseDraft)
-
     # save one expense and offer undo
     async def log(
-        self, inbound: Inbound, transport: Transport, source: LedgerSource = LedgerSource.TEXT
+        self, inbound: Inbound, transport: Transport, draft: ExpenseDraft,
+        source: LedgerSource = LedgerSource.TEXT
     ) -> None:
-        draft = await self.parse(inbound.text or "")
         # the model can return zero or negative amounts so treat them as missing
         if draft.amount_cents is None or draft.amount_cents <= 0:
             await transport.send_text(
@@ -111,24 +102,24 @@ class ExpenseLogger:
             return
         await self._save(inbound, transport, draft, draft.amount_cents, source)
 
-    # transcribe a voice note, echo what was heard, then log it like text
-    async def log_voice(self, inbound: Inbound, transport: Transport) -> None:
+    # transcribe a voice note and echo what was heard, none when it cannot be used
+    async def transcribe(self, inbound: Inbound, transport: Transport) -> str | None:
         audio = await transport.fetch_media(inbound.media_ref or "")
         if voice_too_long(audio):
             await transport.send_text(
                 inbound.user_id,
                 f"That voice note is over {MAX_VOICE_SECONDS} seconds. Try a shorter one"
             )
-            return
+            return None
         # whatsapp voice notes are ogg opus
         heard = (await self._llm.transcribe(audio, "audio/ogg")).strip()
         if not heard:
             await transport.send_text(
                 inbound.user_id, "I couldn't hear that. Try again or type it"
             )
-            return
+            return None
         await transport.send_text(inbound.user_id, f"Heard: {heard}")
-        await self.log(replace(inbound, kind="text", text=heard), transport, LedgerSource.VOICE)
+        return heard
 
     # read a receipt photo, save it when it adds up, else ask to confirm the total
     async def log_receipt(self, inbound: Inbound, transport: Transport) -> None:
@@ -225,6 +216,24 @@ class ExpenseLogger:
             voided = (await session.execute(query)).scalar_one_or_none()
             await session.commit()
         await transport.send_text(inbound.user_id, "Removed" if voided else "Nothing to undo")
+
+    # void the latest expense the sender logged themselves
+    async def undo_last(self, inbound: Inbound, transport: Transport) -> None:
+        query = (
+            select(LedgerEntry.id)
+            .join(User, LedgerEntry.user_id == User.id)
+            .where(
+                User.wa_user_id == inbound.user_id,
+                LedgerEntry.kind == LedgerKind.EXPENSE,
+                LedgerEntry.source != LedgerSource.BILL,
+                LedgerEntry.voided_at.is_(None)
+            )
+            .order_by(LedgerEntry.occurred_at.desc())
+            .limit(1)
+        )
+        async with self._sessions() as session:
+            latest = (await session.execute(query)).scalar_one_or_none()
+        await self.undo(inbound, str(latest or ""), transport)
 
     # get or create the user, safe when two messages arrive together
     async def _user_id(self, session: AsyncSession, wa_user_id: str) -> uuid.UUID:

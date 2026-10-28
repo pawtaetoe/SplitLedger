@@ -1,20 +1,22 @@
 from fastapi.testclient import TestClient
 
 from splitledger.channels.simulator import simulator
-from splitledger.handlers.router import Router
+from splitledger.handlers.router import MessageReader, Router
+from splitledger.llm.schemas import GLOBAL
 from splitledger.main import app
-from tests.fakes import FakeLogger
+from tests.fakes import FakeLLM, FakeLogger
 
 
 # posting text reaches the router and replies through transport
 def test_simulator_text_echo(monkeypatch):
-    monkeypatch.setattr(simulator, "router", Router(FakeLogger()))
+    router = Router(FakeLogger(), MessageReader(FakeLLM(), GLOBAL))
+    monkeypatch.setattr(simulator, "router", router)
     simulator.reset()
     client = TestClient(app)
-    response = client.post("/dev/chat/text", json={"user": "alice", "text": "hello"})
+    response = client.post("/dev/chat/text", json={"user": "alice", "text": "coffee 6.50"})
     assert response.status_code == 200
     messages = response.json()["messages"]
-    assert messages[-1] == {"kind": "text", "to": "alice", "text": "hello"}
+    assert messages[-1] == {"kind": "text", "to": "alice", "text": "coffee 6.50"}
     assert simulator.transport_for("alice").sent == messages
     assert simulator.transport_for("bob").sent == []
 
@@ -29,7 +31,8 @@ def test_simulator_page_served():
 
 # posting an image reaches the router and the same bytes come back
 def test_simulator_image_echo(monkeypatch):
-    monkeypatch.setattr(simulator, "router", Router(FakeLogger()))
+    router = Router(FakeLogger(), MessageReader(FakeLLM(), GLOBAL))
+    monkeypatch.setattr(simulator, "router", router)
     simulator.reset()
     client = TestClient(app)
     response = client.post(

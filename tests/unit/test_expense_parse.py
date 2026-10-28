@@ -1,9 +1,8 @@
 import pytest
 
-from splitledger.handlers.log import ExpenseLogger, money, quick_parse
-from splitledger.llm.schemas import GLOBAL, ExpenseDraft
+from splitledger.handlers.log import money, quick_parse
+from splitledger.llm.schemas import GLOBAL
 from splitledger.llm.schemas_sg import SG
-from tests.fakes import FakeLLM
 
 GLOBAL_ROWS = [
     ("Coffee $6.50", 650, "Dining"),
@@ -36,13 +35,12 @@ MODEL_ROWS = [
 ]
 
 
-# global words work anywhere without the model
+# global words work anywhere when the model is down
 @pytest.mark.parametrize(("text", "cents", "category"), GLOBAL_ROWS)
-async def test_global_fast_path(text, cents, category):
-    llm = FakeLLM()
-    draft = await ExpenseLogger(llm, None, GLOBAL).parse(text)
+def test_global_fast_path(text, cents, category):
+    draft = quick_parse(text, GLOBAL)
+    assert draft is not None
     assert (draft.amount_cents, draft.category) == (cents, category)
-    assert llm.structured_calls == []
 
 
 # singapore words work once the sg locale is on
@@ -59,16 +57,10 @@ def test_local_words_need_their_locale():
     assert quick_parse("S$12 lunch", GLOBAL) is None
 
 
-# messy text, foreign symbols and currency codes fall back to the model
+# messy text, foreign symbols and currency codes are left to the model
 @pytest.mark.parametrize("text", MODEL_ROWS)
-async def test_model_fallback(text):
-    canned = ExpenseDraft(amount_cents=2050, category="Other", note="from model")
-    llm = FakeLLM({"parse_expense": canned})
+def test_rules_leave_these_to_the_model(text):
     assert quick_parse(text, SG) is None
-    assert await ExpenseLogger(llm, None, SG).parse(text) == canned
-    assert len(llm.structured_calls) == 1
-    assert llm.structured_calls[0].startswith("parse_expense: ")
-    assert llm.structured_calls[0].endswith(text)
 
 
 # extending keeps global words and adds the local ones
