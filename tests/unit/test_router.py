@@ -8,7 +8,7 @@ from splitledger.db.models import LedgerSource
 from splitledger.handlers.router import HELP, SOON, UNCLEAR, MessageReader, Router
 from splitledger.llm.schemas import ExpenseDraft, MessageResult
 from splitledger.llm.schemas_sg import SG
-from tests.fakes import FakeAssistant, FakeLLM, FakeLogger, FakeTransport
+from tests.fakes import FakeAssistant, FakeLLM, FakeLogger, FakePlans, FakeTransport
 
 USER = "6581234567"
 
@@ -63,7 +63,7 @@ async def route(
     logger = FakeLogger()
     transport = FakeTransport()
     assistant = FakeAssistant()
-    await Router(logger, MessageReader(llm, SG), assistant).handle(inbound, transport)
+    await Router(logger, MessageReader(llm, SG), assistant, FakePlans()).handle(inbound, transport)
     return landed(logger, transport, assistant), logger, llm
 
 
@@ -123,7 +123,7 @@ async def test_voice_goes_through_reader():
     llm = FakeLLM({"read_message": said("log", 4500)})
     logger = FakeLogger()
     logger.heard = "spent 45 on petrol"
-    router = Router(logger, MessageReader(llm, SG), FakeAssistant())
+    router = Router(logger, MessageReader(llm, SG), FakeAssistant(), FakePlans())
     await router.handle(audio("note-1"), FakeTransport())
     assert logger.calls == ["transcribe", "log"]
     assert logger.drafts[0][1] == LedgerSource.VOICE
@@ -135,7 +135,7 @@ async def test_spoken_question_is_not_logged():
     logger = FakeLogger()
     logger.heard = "how much did I spend this week"
     assistant = FakeAssistant()
-    router = Router(logger, MessageReader(llm, SG), assistant)
+    router = Router(logger, MessageReader(llm, SG), assistant, FakePlans())
     await router.handle(audio("note-1"), FakeTransport())
     assert assistant.asked == ["how much did I spend this week"]
 
@@ -167,3 +167,22 @@ async def test_slow_model_falls_back(monkeypatch):
 
     result = await MessageReader(SlowLLM(), SG).read("coffee 6.50")
     assert (result.intent, result.expense.amount_cents) == ("log", 650)
+
+
+# plan buttons, the plan command, income replies and plan talk reach the plan manager
+async def test_plan_routes():
+    plans = FakePlans()
+    llm = FakeLLM({"read_message": said("plan")})
+    router = Router(FakeLogger(), MessageReader(llm, SG), FakeAssistant(), plans)
+    transport = FakeTransport()
+    await router.handle(button("plan:fw:503020"), transport)
+    await router.handle(text("/plan"), transport)
+    await router.handle(text("set up a budget for me"), transport)
+    plans.waiting = True
+    await router.handle(text("4500"), transport)
+    assert plans.calls == [
+        "welcome_if_new", "button plan:fw:503020",
+        "welcome_if_new", "show",
+        "welcome_if_new", "show",
+        "welcome_if_new", "on_text"
+    ]

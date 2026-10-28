@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
+from splitledger.channels.layout import split_choice, with_descriptions
 from splitledger.contracts.messages import Inbound
 from splitledger.handlers.router import Router, message_router
 
@@ -39,8 +40,9 @@ class SimulatorTransport:
     async def send_buttons(
         self, to: str, text: str, buttons: list[tuple[str, str]]
     ) -> None:
-        shown = [{"id": button_id, "title": title} for button_id, title in buttons]
-        self.sent.append({"kind": "buttons", "to": to, "text": text, "buttons": shown})
+        shown = [{"id": button_id, "title": split_choice(title)[0]} for button_id, title in buttons]
+        body = with_descriptions(text, buttons)
+        self.sent.append({"kind": "buttons", "to": to, "text": body, "buttons": shown})
 
     # record one image and keep its bytes fetchable
     async def send_image(self, to: str, png: bytes, caption: str | None = None) -> None:

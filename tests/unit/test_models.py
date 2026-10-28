@@ -10,6 +10,7 @@ def test_expected_tables_exist():
         "ledger_entries",
         "processed_messages",
         "budgets",
+        "budget_plans",
         "bills",
         "bill_items",
         "participants",

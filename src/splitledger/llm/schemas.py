@@ -99,5 +99,5 @@ class ExpenseDraft(BaseModel):
 
 # what a free text message wants plus the expense when it is one
 class MessageResult(BaseModel):
-    intent: Literal["log", "ask", "split", "claim", "chat", "unclear"]
+    intent: Literal["log", "ask", "plan", "split", "claim", "chat", "unclear"]
     expense: ExpenseDraft | None = None

@@ -62,4 +62,4 @@ async def test_clear_note_returns_transcript():
     llm = FakeLLM()
     llm.transcript = " coffee 4.50 "
     assert await logger_for(llm).transcribe(voice(), transport) == "coffee 4.50"
-    assert transport.sent_text == [("6581234567", "Heard: coffee 4.50")]
+    assert transport.sent_text == [("6581234567", "*I heard*\n> coffee 4.50")]

@@ -11,9 +11,11 @@ from splitledger.db.models import LedgerSource
 from splitledger.db.session import SessionFactory
 from splitledger.handlers.ask import SpendAssistant
 from splitledger.handlers.log import ExpenseLogger, quick_parse
+from splitledger.handlers.plan import PlanManager
 from splitledger.llm.client import MetaLLM
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, Locale, MessageResult
 from splitledger.llm.schemas_sg import SG
+from splitledger.plans.quota import QuotaBook
 from splitledger.settings import settings
 
 LOG = logging.getLogger(__name__)
@@ -32,13 +34,13 @@ QUESTION_WORDS = frozenset(
      "does", "show", "list"}
 )
 HELP = (
-    "I log your spending and split bills.\n"
-    "Type it: coffee 4.50\n"
-    "Or send a receipt photo or a voice note.\n"
-    "Tap Undo, or send /undo to remove your last entry.\n"
-    "Send /help to see this again."
+    "*What I can do*\n"
+    "- Log: type _coffee 4.50_, or send a receipt photo or voice note\n"
+    "- Ask: _how much did I spend this week?_\n"
+    "- Budget: say _set up a plan_\n"
+    "- Undo your last entry: send /undo"
 )
-UNCLEAR = "Sorry, I didn't catch that. Try something like coffee 4.50, or send /help"
+UNCLEAR = "*Sorry, I didn't catch that*\nTry something like _coffee 4.50_, or send /help."
 # replies for intents whose handlers land in later tasks
 SOON = {
     "split": "Group bill splitting is coming soon",
@@ -84,16 +86,19 @@ class MessageReader:
 
 # routes one inbound message, fixed rules for bot formats and the model for language
 class Router:
-    # logger for saving, reader for free text, assistant for questions
+    # logger for saving, reader for free text, assistant for questions, plans for budgets
     def __init__(
-        self, logger: ExpenseLogger, reader: MessageReader, assistant: SpendAssistant
+        self, logger: ExpenseLogger, reader: MessageReader, assistant: SpendAssistant,
+        plans: PlanManager
     ) -> None:
         self._logger = logger
         self._reader = reader
         self._assistant = assistant
+        self._plans = plans
 
-    # pick the handler for this message
+    # greet new users, then pick the handler for this message
     async def handle(self, inbound: Inbound, transport: Transport) -> None:
+        await self._plans.welcome_if_new(inbound, transport)
         if inbound.kind == "button":
             await self._button(inbound, inbound.button_id or "", transport)
             return
@@ -115,8 +120,11 @@ class Router:
             return
         await transport.send_text(inbound.user_id, inbound.text or "")
 
-    # undo and receipt buttons go to the logger, others echo
+    # plan buttons go to plans, undo and receipt buttons to the logger, others echo
     async def _button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
+        if button_id.startswith("plan:"):
+            await self._plans.on_button(inbound, button_id, transport)
+            return
         if button_id.startswith("undo:"):
             await self._logger.undo(inbound, button_id.removeprefix("undo:"), transport)
             return
@@ -139,10 +147,17 @@ class Router:
         self, inbound: Inbound, text: str, transport: Transport, source: LedgerSource
     ) -> None:
         if text.startswith("/"):
-            if text.split()[0].lower() == "/undo":
+            command = text.split()[0].lower()
+            if command == "/undo":
                 await self._logger.undo_last(inbound, transport)
                 return
+            if command == "/plan":
+                await self._plans.show(inbound, transport)
+                return
             await transport.send_text(inbound.user_id, HELP)
+            return
+        if self._plans.waiting_for_text(inbound.user_id):
+            await self._plans.on_text(inbound, transport)
             return
         if CLAIM.match(text):
             await transport.send_text(inbound.user_id, SOON["claim"])
@@ -155,6 +170,9 @@ class Router:
         if result.intent == "ask":
             await self._assistant.answer(inbound, transport)
             return
+        if result.intent == "plan":
+            await self._plans.show(inbound, transport)
+            return
         if result.intent == "chat":
             await transport.send_text(inbound.user_id, HELP)
             return
@@ -163,8 +181,10 @@ class Router:
 
 llm = MetaLLM()
 locale = LOCALES[settings.locale]
+book = QuotaBook(SessionFactory)
 message_router = Router(
-    ExpenseLogger(llm, SessionFactory, locale),
+    ExpenseLogger(llm, SessionFactory, locale, book),
     MessageReader(llm, locale),
-    SpendAssistant(llm, SessionFactory)
+    SpendAssistant(llm, SessionFactory, book),
+    PlanManager(SessionFactory, book, locale)
 )

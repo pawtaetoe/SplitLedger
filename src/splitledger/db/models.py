@@ -58,6 +58,8 @@ class User(Base):
     currency: Mapped[str] = mapped_column(sa.String, default="SGD")
     timezone: Mapped[str] = mapped_column(sa.String, default="Asia/Singapore")
     pay_methods: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict)
+    take_home_cents: Mapped[int | None] = mapped_column(sa.BigInteger)
+    gross_income_cents: Mapped[int | None] = mapped_column(sa.BigInteger)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()
     )
@@ -111,6 +113,22 @@ class Budget(Base):
     month: Mapped[str] = mapped_column(sa.String)
     limit_cents: Mapped[int] = mapped_column(sa.BigInteger)
     last_alert_pct: Mapped[int] = mapped_column(sa.Integer, default=0)
+
+
+# the budget framework a user follows, at most one each
+class BudgetPlan(Base):
+    __tablename__ = "budget_plans"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), unique=True)
+    framework: Mapped[str] = mapped_column(sa.String)
+    period: Mapped[str] = mapped_column(sa.String)
+    buckets: Mapped[dict[str, int]] = mapped_column(JSONB)
+    category_map: Mapped[dict[str, str]] = mapped_column(JSONB)
+    step_up_pct: Mapped[int | None] = mapped_column(sa.Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
 
 
 # one group bill, money columns in cents

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -14,6 +15,7 @@ from splitledger.settings import settings
 
 T = TypeVar("T")
 
+LOG = logging.getLogger(__name__)
 MAX_TOOL_ROUNDS = 4
 
 
@@ -152,6 +154,8 @@ class MetaLLM:
                 function = call.get("function", {})
                 name = str(function.get("name", ""))
                 args = json.loads(function.get("arguments") or "{}")
+                # tool args are dates, categories and counts, never user details
+                LOG.info("tool %s %s", name, args)
                 result = await by_name[name].run(args)
                 calls.append(name)
                 steps += 1

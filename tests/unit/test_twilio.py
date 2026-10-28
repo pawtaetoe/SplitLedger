@@ -16,7 +16,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL
 from splitledger.settings import settings
-from tests.fakes import FakeAssistant, FakeLLM, FakeLogger
+from tests.fakes import FakeAssistant, FakeLLM, FakeLogger, FakePlans
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "twilio"
 TOKEN = "test-token"
@@ -24,6 +24,7 @@ SID = "AC123"
 BASE = "https://example.ngrok.app"
 SENDER = "whatsapp:+14155238886"
 MESSAGES_URL = f"https://api.twilio.com/2010-04-01/Accounts/{SID}/Messages.json"
+CONTENT_URL = "https://content.twilio.com/v1/Content"
 
 
 # load one fixture form
@@ -48,7 +49,7 @@ def make_client() -> TestClient:
 # swap in a real twilio transport with in memory dedupe
 def use_twilio_channel(monkeypatch) -> twilio.TwilioTransport:
     transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
-    router = Router(FakeLogger(), MessageReader(FakeLLM(), GLOBAL), FakeAssistant())
+    router = Router(FakeLogger(), MessageReader(FakeLLM(), GLOBAL), FakeAssistant(), FakePlans())
     channel = WhatsAppChannel(transport, router)
     seen: set[str] = set()
 
@@ -129,14 +130,38 @@ def test_webhook_bad_signature(monkeypatch):
     assert route.call_count == 0
 
 
-# options are numbered and a digit reply becomes the button
+# real buttons go through a quick reply template created once and reused
+@respx.mock
+async def test_quick_reply_buttons():
+    listed = respx.get(CONTENT_URL).mock(return_value=httpx.Response(200, json={"contents": []}))
+    created = respx.post(CONTENT_URL).mock(return_value=httpx.Response(201, json={"sid": "HX1"}))
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(201, json={}))
+    transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
+    buttons = [("plan:fw:503020", "50/30/20 — needs, wants, savings"), ("plan:cancel", "Cancel")]
+    await transport.send_buttons("6581234567", "*Pick a plan*", buttons)
+    await transport.send_buttons("6581234567", "*Again*", buttons)
+    sent = parse_qs(route.calls.last.request.content.decode())
+    assert sent["ContentSid"] == ["HX1"]
+    values = json.loads(sent["ContentVariables"][0])
+    assert values == {
+        "1": "*Again*\n\n- *50/30/20* — needs, wants, savings",
+        "2": "50/30/20", "3": "plan:fw:503020", "4": "Cancel", "5": "plan:cancel"
+    }
+    template = json.loads(created.calls.last.request.content)
+    actions = template["types"]["twilio/quick-reply"]["actions"]
+    assert actions[1] == {"title": "{{4}}", "id": "{{5}}"}
+    assert (listed.call_count, created.call_count) == (1, 1)
+
+
+# when buttons fail the choices are numbered and a digit reply becomes the button
 @respx.mock
 async def test_digit_reply_becomes_button():
+    respx.get(CONTENT_URL).mock(return_value=httpx.Response(500))
     route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(201, json={}))
     transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
     await transport.send_buttons("6581234567", "Logged", [("undo:1", "Undo"), ("keep", "Keep")])
     sent = parse_qs(route.calls.last.request.content.decode())
-    assert sent["Body"] == ["Logged\n1 Undo\n2 Keep"]
+    assert sent["Body"] == ["Logged\n\n*1* · Undo\n*2* · Keep\n\n_Reply with a number_"]
     reply = Inbound("m1", "6581234567", "text", text="2")
     picked = transport.apply_menu(reply)
     assert (picked.kind, picked.button_id) == ("button", "keep")
@@ -146,6 +171,7 @@ async def test_digit_reply_becomes_button():
 # any other message clears the menu
 @respx.mock
 async def test_other_message_clears_menu():
+    respx.get(CONTENT_URL).mock(return_value=httpx.Response(500))
     respx.post(MESSAGES_URL).mock(return_value=httpx.Response(201, json={}))
     transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
     await transport.send_buttons("6581234567", "Logged", [("undo:1", "Undo")])

@@ -35,5 +35,9 @@
   {"text": "thanks!", "intent": "chat"},
   {"text": "good morning", "intent": "chat"},
   {"text": "who are you", "intent": "chat"},
-  {"text": "asdfgh", "intent": "unclear"}
+  {"text": "asdfgh", "intent": "unclear"},
+  {"text": "set up a budget for me", "intent": "plan"},
+  {"text": "I want to change my budget plan", "intent": "plan"},
+  {"text": "show me my plan", "intent": "plan"},
+  {"text": "am I over my budget this week?", "intent": "ask"}
 ]

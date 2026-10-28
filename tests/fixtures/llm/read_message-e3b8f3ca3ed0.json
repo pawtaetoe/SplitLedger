@@ -1,10 +1,10 @@
 {
   "intent": "log",
   "expense": {
-    "amount_cents": 1200,
-    "currency": null,
+    "amount_cents": 650,
+    "currency": "USD",
     "category": "Dining",
     "vendor": null,
-    "note": "makan"
+    "note": "coffee"
   }
 }

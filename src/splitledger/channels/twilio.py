@@ -1,18 +1,23 @@
 import base64
 import hashlib
 import hmac
+import json
+import logging
 import uuid
 from urllib.parse import parse_qsl
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
+from splitledger.channels.layout import numbered, split_choice, with_descriptions
 from splitledger.channels.whatsapp import WhatsAppChannel
 from splitledger.contracts.messages import Inbound
 from splitledger.handlers.router import message_router
 from splitledger.settings import settings
 
+LOG = logging.getLogger(__name__)
 API_BASE = "https://api.twilio.com/2010-04-01/Accounts"
+CONTENT_URL = "https://content.twilio.com/v1/Content"
 
 
 # check a twilio signature against the url and posted params
@@ -60,6 +65,7 @@ class TwilioTransport:
         self._from = sender or settings.twilio_whatsapp_from
         self._media: dict[str, bytes] = {}
         self._menus: dict[str, dict[str, str]] = {}
+        self._templates: dict[int, str] = {}
 
     # post one message form to twilio
     async def _post_message(self, to: str, fields: dict[str, str]) -> None:
@@ -78,10 +84,55 @@ class TwilioTransport:
 
     # send text plus numbered options and remember them for the next reply
     async def send_buttons(self, to: str, text: str, buttons: list[tuple[str, str]]) -> None:
-        numbered = list(enumerate(buttons, 1))
-        self._menus[to] = {str(number): button_id for number, (button_id, _) in numbered}
-        options = "\n".join(f"{number} {title}" for number, (_, title) in numbered)
-        await self.send_text(to, f"{text}\n{options}")
+        # digits keep working even when real buttons are shown
+        self._menus[to] = {str(n): button_id for n, (button_id, _) in enumerate(buttons, 1)}
+        if len(buttons) <= 3:
+            try:
+                await self._send_quick_reply(to, with_descriptions(text, buttons), buttons)
+                return
+            except (httpx.HTTPError, RuntimeError, KeyError, ValueError) as error:
+                LOG.warning("twilio buttons failed with %s, sending numbers", type(error).__name__)
+        await self.send_text(to, numbered(text, buttons))
+
+    # real tappable buttons through a reusable content template
+    async def _send_quick_reply(
+        self, to: str, body: str, buttons: list[tuple[str, str]]
+    ) -> None:
+        values = {"1": body}
+        for index, (button_id, title) in enumerate(buttons):
+            values[str(2 * index + 2)] = split_choice(title)[0]
+            values[str(2 * index + 3)] = button_id
+        sid = await self._template_sid(len(buttons))
+        await self._post_message(to, {"ContentSid": sid, "ContentVariables": json.dumps(values)})
+
+    # one quick reply template per button count, found or created once
+    async def _template_sid(self, count: int) -> str:
+        if count in self._templates:
+            return self._templates[count]
+        name = f"splitledger_buttons_{count}"
+        auth = (self._sid, self._token)
+        async with httpx.AsyncClient(timeout=10) as client:
+            found = await client.get(CONTENT_URL, params={"PageSize": 100}, auth=auth)
+            found.raise_for_status()
+            existing = [c["sid"] for c in found.json().get("contents", [])
+                        if c.get("friendly_name") == name]
+            if existing:
+                sid = str(existing[0])
+            else:
+                actions = [{"title": f"{{{{{2 * i + 2}}}}}", "id": f"{{{{{2 * i + 3}}}}}"}
+                           for i in range(count)]
+                variables = {str(n): f"value {n}" for n in range(1, 2 * count + 2)}
+                content = {
+                    "friendly_name": name,
+                    "language": "en",
+                    "variables": variables,
+                    "types": {"twilio/quick-reply": {"body": "{{1}}", "actions": actions}}
+                }
+                created = await client.post(CONTENT_URL, json=content, auth=auth)
+                created.raise_for_status()
+                sid = str(created.json()["sid"])
+        self._templates[count] = sid
+        return sid
 
     # keep the image and send twilio a public link to it
     async def send_image(self, to: str, png: bytes, caption: str | None = None) -> None:

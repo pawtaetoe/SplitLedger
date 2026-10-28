@@ -48,9 +48,9 @@ async def test_guarded_returns_error():
 
 # every tool names its arguments so the model knows what to send
 def test_tools_have_schemas():
-    tools = SpendTools(None, None, SG).tools()
+    tools = SpendTools(None, None, SG, None).tools()
     assert [tool.name for tool in tools] == [
-        "sum_spend", "top_expenses", "list_expenses", "who_owes_me"
+        "sum_spend", "top_expenses", "list_expenses", "who_owes_me", "plan_status"
     ]
     for tool in tools[:3]:
         assert tool.parameters["required"] == ["start", "end"]

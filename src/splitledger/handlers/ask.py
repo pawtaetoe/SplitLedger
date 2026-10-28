@@ -16,6 +16,7 @@ from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerEntry, LedgerKind, User
 from splitledger.handlers.log import money
 from splitledger.llm.schemas import Category
+from splitledger.plans.quota import QuotaBook
 
 LOG = logging.getLogger(__name__)
 PROMPT = (Path(__file__).parents[1] / "llm" / "prompts" / "assistant.md").read_text(
@@ -71,11 +72,13 @@ def guarded(query: Query) -> Query:
 class SpendTools:
     # every query is scoped to this user and read in their timezone
     def __init__(
-        self, sessions: async_sessionmaker[AsyncSession], user_id: uuid.UUID, zone: ZoneInfo
+        self, sessions: async_sessionmaker[AsyncSession], user_id: uuid.UUID, zone: ZoneInfo,
+        book: QuotaBook
     ) -> None:
         self._sessions = sessions
         self._user_id = user_id
         self._zone = zone
+        self._book = book
 
     # the tools with their argument schemas
     def tools(self) -> list[Tool]:
@@ -93,7 +96,9 @@ class SpendTools:
             Tool("list_expenses", "expenses between two days, newest first",
                  guarded(self.list_expenses), with_category),
             Tool("who_owes_me", "money friends still owe from shared bills",
-                 guarded(self.who_owes_me))
+                 guarded(self.who_owes_me)),
+            Tool("plan_status", "budget plan buckets with quota, spent and left this period",
+                 guarded(self.plan_status))
         ]
 
     # total per currency
@@ -139,6 +144,10 @@ class SpendTools:
                 for name, code, cents in rows]
         return {"owed": owed}
 
+    # the plan for this period from the quota book
+    async def plan_status(self, args: dict[str, Any]) -> dict[str, Any]:
+        return await self._book.status(self._user_id)
+
     # expense filters for this user, the range and an optional category
     def _filters(self, args: dict[str, Any]) -> list[Any]:
         first, after = day_range(args, self._zone)
@@ -177,10 +186,13 @@ class SpendTools:
 
 # answers spending questions with the model calling read only tools
 class SpendAssistant:
-    # model for the tool loop and a session factory for the queries
-    def __init__(self, llm: LLM, sessions: async_sessionmaker[AsyncSession]) -> None:
+    # model for the tool loop, sessions for the queries and the quota book for plans
+    def __init__(
+        self, llm: LLM, sessions: async_sessionmaker[AsyncSession], book: QuotaBook
+    ) -> None:
         self._llm = llm
         self._sessions = sessions
+        self._book = book
 
     # say we are checking, run the tool loop, reply with its answer or a fallback
     async def answer(self, inbound: Inbound, transport: Transport) -> None:
@@ -198,7 +210,7 @@ class SpendAssistant:
             .replace("{timezone}", user.timezone)
             .replace("{currency}", user.currency)
         )
-        tools = SpendTools(self._sessions, user.id, zone).tools()
+        tools = SpendTools(self._sessions, user.id, zone, self._book).tools()
         try:
             result = await asyncio.wait_for(
                 self._llm.run_tools(system, inbound.text or "", tools), ANSWER_TIMEOUT

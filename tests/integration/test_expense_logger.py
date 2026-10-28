@@ -5,7 +5,7 @@ from splitledger.db.models import LedgerEntry, User
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
-from tests.fakes import FakeAssistant, FakeLLM, FakeTransport
+from tests.fakes import FakeAssistant, FakeLLM, FakePlans, FakeTransport
 
 
 # one text message from a user
@@ -35,7 +35,7 @@ async def test_log_creates_user_once(sessions):
     assert await count(sessions, User) == 1
     assert await count(sessions, LedgerEntry) == 2
     to, reply, buttons = transport.sent_buttons[0]
-    assert (to, reply) == ("6581234567", "Logged USD 6.50 · Dining · coffee")
+    assert (to, reply) == ("6581234567", "✅ *Logged USD 6.50*\nDining · coffee")
     assert buttons[0][0].startswith("undo:")
 
 
@@ -92,8 +92,8 @@ async def test_receipt_saved_once(sessions):
     async with sessions() as session:
         rows = (await session.execute(select(LedgerEntry.amount_cents, LedgerEntry.source))).all()
     assert [(amount, source.value) for amount, source in rows] == [(2200, "RECEIPT")]
-    assert transport.sent_buttons[0][1] == "Logged USD 22.00 · Dining · Cafe"
-    assert transport.sent_text == [("6581234567", "You already logged this receipt")]
+    assert transport.sent_buttons[0][1] == "✅ *Logged USD 22.00*\nDining · Cafe"
+    assert transport.sent_text[0][1].startswith("*Already logged*")
 
 
 # a voice note echoes the transcript, goes through the router and logs a voice expense
@@ -103,10 +103,10 @@ async def test_voice_note_logged(sessions):
     llm = FakeLLM()
     llm.transcript = "Just spent 45 on petrol at Shell"
     logger = ExpenseLogger(llm, sessions, GLOBAL)
-    router = Router(logger, MessageReader(llm, GLOBAL), FakeAssistant())
+    router = Router(logger, MessageReader(llm, GLOBAL), FakeAssistant(), FakePlans())
     await router.handle(Inbound("m1", "6581234567", "audio", media_ref="note-1"), transport)
-    assert transport.sent_text == [("6581234567", "Heard: Just spent 45 on petrol at Shell")]
-    assert transport.sent_buttons[0][1].startswith("Logged USD 45.00 · Transport")
+    assert transport.sent_text == [("6581234567", "*I heard*\n> Just spent 45 on petrol at Shell")]
+    assert transport.sent_buttons[0][1].startswith("✅ *Logged USD 45.00*\nTransport")
     async with sessions() as session:
         rows = (await session.execute(select(LedgerEntry.amount_cents, LedgerEntry.source))).all()
     assert [(amount, source.value) for amount, source in rows] == [(4500, "VOICE")]

@@ -5,6 +5,7 @@ from splitledger.contracts.llm import ToolRunResult
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, LedgerKind, User
 from splitledger.handlers.ask import CHECKING, NOTHING_YET, UNAVAILABLE, SpendAssistant, SpendTools
+from splitledger.plans.quota import QuotaBook
 from tests.fakes import FakeLLM, FakeTransport
 
 SG = ZoneInfo("Asia/Singapore")
@@ -45,7 +46,7 @@ WEEK = {"start": "2026-10-25", "end": "2026-10-27"}
 # sums match the seeded rows and skip voided and other users
 async def test_sum_spend(sessions):
     me = await seed(sessions)
-    tools = SpendTools(sessions, me.id, SG)
+    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions))
     assert await tools.sum_spend(WEEK) == {"totals": [{"total": "SGD 65.70", "count": 3}]}
     dining = await tools.sum_spend({**WEEK, "category": "Dining"})
     assert dining == {"totals": [{"total": "SGD 51.50", "count": 2}]}
@@ -54,7 +55,7 @@ async def test_sum_spend(sessions):
 # a late night expense counts on its local day
 async def test_local_day_boundary(sessions):
     me = await seed(sessions)
-    tools = SpendTools(sessions, me.id, SG)
+    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions))
     day = await tools.list_expenses({"start": "2026-10-27", "end": "2026-10-27"})
     assert [row["what"] for row in day["expenses"]] == ["kopi"]
     next_day = await tools.list_expenses({"start": "2026-10-28", "end": "2026-10-28"})
@@ -64,7 +65,7 @@ async def test_local_day_boundary(sessions):
 # biggest first and capped at n
 async def test_top_expenses(sessions):
     me = await seed(sessions)
-    top = await SpendTools(sessions, me.id, SG).top_expenses({**WEEK, "n": 2})
+    top = await SpendTools(sessions, me.id, SG, QuotaBook(sessions)).top_expenses({**WEEK, "n": 2})
     assert [row["amount"] for row in top["expenses"]] == ["SGD 45.00", "SGD 14.20"]
 
 
@@ -75,7 +76,7 @@ async def test_assistant_replies(sessions):
     llm.tool_result = ToolRunResult(text="You spent SGD 65.70 this week.")
     transport = FakeTransport()
     question = Inbound("m1", ME, "text", text="this week?")
-    await SpendAssistant(llm, sessions).answer(question, transport)
+    await SpendAssistant(llm, sessions, QuotaBook(sessions)).answer(question, transport)
     replies = [reply for _, reply in transport.sent_text]
     assert replies == [CHECKING, "You spent SGD 65.70 this week."]
 
@@ -90,12 +91,13 @@ async def test_assistant_failure(sessions):
 
     transport = FakeTransport()
     question = Inbound("m1", ME, "text", text="?")
-    await SpendAssistant(BrokenLLM(), sessions).answer(question, transport)
+    await SpendAssistant(BrokenLLM(), sessions, QuotaBook(sessions)).answer(question, transport)
     assert transport.sent_text[-1] == (ME, UNAVAILABLE)
 
 
 # someone who never logged anything gets a hint and no model call
 async def test_assistant_new_user(sessions):
     transport = FakeTransport()
-    await SpendAssistant(FakeLLM(), sessions).answer(Inbound("m1", ME, "text", text="?"), transport)
+    assistant = SpendAssistant(FakeLLM(), sessions, QuotaBook(sessions))
+    await assistant.answer(Inbound("m1", ME, "text", text="?"), transport)
     assert transport.sent_text == [(ME, NOTHING_YET)]

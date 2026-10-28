@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.exc import IntegrityError
 
+from splitledger.channels.layout import split_choice, with_descriptions
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import ProcessedMessage
@@ -54,7 +55,8 @@ def _parse_message(message: dict[str, Any]) -> Inbound | None:
     if kind == "audio":
         return Inbound(message_id, user_id, "audio", media_ref=message.get("audio", {}).get("id"))
     if kind == "interactive":
-        reply = message.get("interactive", {}).get("button_reply", {})
+        interactive = message.get("interactive", {})
+        reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
         return Inbound(
             message_id, user_id, "button", text=reply.get("title"), button_id=reply.get("id")
         )
@@ -94,21 +96,31 @@ class WhatsAppTransport:
         }
         await self._post_message(payload)
 
-    # send text with reply buttons
+    # send text with reply buttons, or a pick list when there are more than three
     async def send_buttons(self, to: str, text: str, buttons: list[tuple[str, str]]) -> None:
-        shown = [
-            {"type": "reply", "reply": {"id": button_id, "title": title}}
-            for button_id, title in buttons
-        ]
+        choices = [(button_id, *split_choice(title)) for button_id, title in buttons]
+        action: dict[str, Any] = {
+            "buttons": [
+                {"type": "reply", "reply": {"id": button_id, "title": label}}
+                for button_id, label, _ in choices
+            ]
+        }
+        kind = "button"
+        body = with_descriptions(text, buttons)
+        # whatsapp allows three reply buttons, a list holds up to ten rows with descriptions
+        if len(buttons) > 3:
+            rows = [
+                {"id": button_id, "title": label, **({"description": desc} if desc else {})}
+                for button_id, label, desc in choices
+            ]
+            action = {"button": "Choose", "sections": [{"title": "Options", "rows": rows}]}
+            kind = "list"
+            body = text
         payload = {
             "messaging_product": "whatsapp",
             "to": to,
             "type": "interactive",
-            "interactive": {
-                "type": "button",
-                "body": {"text": text},
-                "action": {"buttons": shown}
-            }
+            "interactive": {"type": kind, "body": {"text": body}, "action": action}
         }
         await self._post_message(payload)
 

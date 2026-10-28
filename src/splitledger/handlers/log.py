@@ -3,6 +3,7 @@ import re
 import uuid
 from decimal import Decimal
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -13,6 +14,9 @@ from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerEntry, LedgerKind, LedgerSource, LedgerStatus, User
 from splitledger.llm.schemas import CURRENCY_CODES, ExpenseDraft, Locale, ReceiptDraft
+
+if TYPE_CHECKING:
+    from splitledger.plans.quota import QuotaBook
 
 PROMPTS = Path(__file__).parents[1] / "llm" / "prompts"
 RECEIPT_PROMPT = f"parse_receipt: {(PROMPTS / 'parse_receipt.md').read_text(encoding='utf-8')}"
@@ -72,6 +76,23 @@ def voice_too_long(audio: bytes) -> bool:
     return len(audio) > MAX_VOICE_BYTES or (seconds is not None and seconds > MAX_VOICE_SECONDS)
 
 
+# get or create a user, safe when two messages arrive together, true when just created
+async def ensure_user(
+    session: AsyncSession, wa_user_id: str, locale: Locale
+) -> tuple[uuid.UUID, bool]:
+    created = await session.execute(
+        insert(User)
+        .values(wa_user_id=wa_user_id, currency=locale.currency, timezone=locale.timezone)
+        .on_conflict_do_nothing(index_elements=["wa_user_id"])
+        .returning(User.id)
+    )
+    new_id = created.scalar_one_or_none()
+    if new_id is not None:
+        return new_id, True
+    found = await session.execute(select(User.id).where(User.wa_user_id == wa_user_id))
+    return found.scalar_one(), False
+
+
 # money for a reply line, the code reads clearly in any country
 def money(cents: int, currency: str) -> str:
     return f"{currency} {cents // 100}.{cents % 100:02d}"
@@ -79,13 +100,15 @@ def money(cents: int, currency: str) -> str:
 
 # logs text and receipt expenses and undoes them
 class ExpenseLogger:
-    # model for messy text, a session factory for the ledger and the locale for keywords
+    # model, ledger sessions, locale and the quota book that adds plan lines to replies
     def __init__(
-        self, llm: LLM, sessions: async_sessionmaker[AsyncSession], locale: Locale
+        self, llm: LLM, sessions: async_sessionmaker[AsyncSession], locale: Locale,
+        book: "QuotaBook | None" = None
     ) -> None:
         self._llm = llm
         self._sessions = sessions
         self._locale = locale
+        self._book = book
         self._receipts: dict[str, ReceiptDraft] = {}
         self._logged: set[tuple[str, str]] = set()
 
@@ -97,7 +120,7 @@ class ExpenseLogger:
         # the model can return zero or negative amounts so treat them as missing
         if draft.amount_cents is None or draft.amount_cents <= 0:
             await transport.send_text(
-                inbound.user_id, "How much was it? Try something like coffee 6.50"
+                inbound.user_id, "*How much was it?*\nTry something like _coffee 6.50_."
             )
             return
         await self._save(inbound, transport, draft, draft.amount_cents, source)
@@ -108,17 +131,17 @@ class ExpenseLogger:
         if voice_too_long(audio):
             await transport.send_text(
                 inbound.user_id,
-                f"That voice note is over {MAX_VOICE_SECONDS} seconds. Try a shorter one"
+                f"*That voice note is too long*\nPlease keep it under {MAX_VOICE_SECONDS} seconds."
             )
             return None
         # whatsapp voice notes are ogg opus
         heard = (await self._llm.transcribe(audio, "audio/ogg")).strip()
         if not heard:
             await transport.send_text(
-                inbound.user_id, "I couldn't hear that. Try again or type it"
+                inbound.user_id, "*I couldn't hear that*\nTry again, or type it."
             )
             return None
-        await transport.send_text(inbound.user_id, f"Heard: {heard}")
+        await transport.send_text(inbound.user_id, f"*I heard*\n> {heard}")
         return heard
 
     # read a receipt photo, save it when it adds up, else ask to confirm the total
@@ -126,7 +149,9 @@ class ExpenseLogger:
         image = await transport.fetch_media(inbound.media_ref or "")
         key = hashlib.sha256(image).hexdigest()
         if (inbound.user_id, key) in self._logged:
-            await transport.send_text(inbound.user_id, "You already logged this receipt")
+            await transport.send_text(
+                inbound.user_id, "*Already logged*\nThis receipt is saved already."
+            )
             return
         # the same photo is never sent to the model twice
         receipt = self._receipts.get(key)
@@ -136,14 +161,16 @@ class ExpenseLogger:
         total = receipt.total_cents
         if total is None or total <= 0:
             await transport.send_text(
-                inbound.user_id, "I couldn't read the total. Type it instead, like lunch 23.40"
+                inbound.user_id,
+                "*I couldn't read the total*\nType it instead, like _lunch 23.40_."
             )
             return
         if not receipt_adds_up(receipt):
             shown = money(total, receipt.currency or self._locale.currency)
             await transport.send_buttons(
                 inbound.user_id,
-                f"The lines don't add up. Is the total {shown}?",
+                "*Check the total*\nThe lines on this receipt don't add up.\n"
+                f"Is the total *{shown}*?",
                 [(f"receipt:{key}", "Yes, save it")]
             )
             return
@@ -175,8 +202,9 @@ class ExpenseLogger:
     ) -> None:
         currency = draft.currency or self._locale.currency
         async with self._sessions() as session:
+            user_id = await self._user_id(session, inbound.user_id)
             entry = LedgerEntry(
-                user_id=await self._user_id(session, inbound.user_id),
+                user_id=user_id,
                 kind=LedgerKind.EXPENSE,
                 amount_cents=amount,
                 currency=currency,
@@ -189,8 +217,11 @@ class ExpenseLogger:
             session.add(entry)
             await session.commit()
         label = draft.vendor or draft.note or ""
-        summary = f"Logged {money(amount, currency)} · {draft.category}"
-        text = f"{summary} · {label}" if label else summary
+        details = f"{draft.category} · {label}" if label else draft.category
+        text = f"✅ *Logged {money(amount, currency)}*\n{details}"
+        lines = await self._book.after_save(user_id, draft.category) if self._book else []
+        if lines:
+            text = text + "\n\n" + "\n".join(lines)
         await transport.send_buttons(inbound.user_id, text, [(f"undo:{entry.id}", "Undo")])
 
     # void one entry the sender owns, repeat taps change nothing
@@ -235,16 +266,6 @@ class ExpenseLogger:
             latest = (await session.execute(query)).scalar_one_or_none()
         await self.undo(inbound, str(latest or ""), transport)
 
-    # get or create the user, safe when two messages arrive together
+    # get or create the user and return their id
     async def _user_id(self, session: AsyncSession, wa_user_id: str) -> uuid.UUID:
-        await session.execute(
-            insert(User)
-            .values(
-                wa_user_id=wa_user_id,
-                currency=self._locale.currency,
-                timezone=self._locale.timezone
-            )
-            .on_conflict_do_nothing(index_elements=["wa_user_id"])
-        )
-        found = await session.execute(select(User.id).where(User.wa_user_id == wa_user_id))
-        return found.scalar_one()
+        return (await ensure_user(session, wa_user_id, self._locale))[0]
