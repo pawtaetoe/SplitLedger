@@ -1,4 +1,4 @@
-.PHONY: setup dev test check record-fixtures
+.PHONY: setup dev test check record-fixtures seed-dev
 
 setup:
 	uv sync
@@ -19,3 +19,6 @@ check:
 
 record-fixtures:
 	uv run python scripts/record_fixtures.py
+
+seed-dev:
+	uv run python scripts/seed_dev.py $(PHONE) $(if $(RESET),--reset)
