@@ -1,4 +1,6 @@
+import logging
 import uuid
+from collections.abc import Awaitable
 from datetime import UTC, datetime
 
 from sqlalchemy import case, func, select
@@ -10,6 +12,7 @@ from splitledger.db.models import LedgerEntry, LedgerKind, User
 from splitledger.handlers.log import money
 from splitledger.pay.rails import PayRails
 
+LOG = logging.getLogger(__name__)
 OWE_ALL = ("owe:all", "Everything I owe")
 SQUARE = "You're all square with {}."
 EARLIER = "With earlier bills that's *{}* in total."
@@ -89,39 +92,60 @@ class SettleUp:
         except ValueError:
             return
 
-    # post the payment on both sides and tell the person paid
+    # i've paid from the chat
     async def _paid(
         self, inbound: Inbound, creditor_id: uuid.UUID, currency: str, transport: Transport
     ) -> None:
         async with self._sessions() as session:
             debtor = (await session.execute(
-                select(User).where(User.wa_user_id == inbound.user_id)
+                select(User.id).where(User.wa_user_id == inbound.user_id)
             )).scalar_one_or_none()
-            creditor = await session.get(User, creditor_id)
+        if debtor is not None:
+            await self.pay(debtor, creditor_id, currency, transport)
+
+    # post the payment on both sides and tell both, the cents paid or 0 when nothing was owed
+    async def pay(
+        self, debtor_id: uuid.UUID, creditor_id: uuid.UUID, currency: str, transport: Transport
+    ) -> int:
+        async with self._sessions() as session:
+            debtor = await session.get(User, debtor_id)
+            # locking the person paid stops a double tap posting the payment twice
+            creditor = await session.get(User, creditor_id, with_for_update=True)
             if debtor is None or creditor is None:
-                return
+                return 0
             cents = await self.owing(session, debtor.id, creditor.id, currency)
-            if cents <= 0:
-                await transport.send_text(inbound.user_id, SQUARE.format(name_of(creditor)))
-                return
             now = datetime.now(UTC)
             received = LedgerEntry(
                 user_id=creditor.id, kind=LedgerKind.SETTLEMENT, amount_cents=cents,
                 currency=currency, counterparty_id=debtor.id, note=debtor.display_name,
                 occurred_at=now
             )
-            session.add_all([received, LedgerEntry(
-                user_id=debtor.id, kind=LedgerKind.SETTLEMENT, amount_cents=-cents,
-                currency=currency, counterparty_id=creditor.id, note=creditor.display_name,
-                occurred_at=now
-            )])
+            if cents > 0:
+                session.add_all([received, LedgerEntry(
+                    user_id=debtor.id, kind=LedgerKind.SETTLEMENT, amount_cents=-cents,
+                    currency=currency, counterparty_id=creditor.id, note=creditor.display_name,
+                    occurred_at=now
+                )])
             await session.commit()
+        if cents <= 0:
+            square = SQUARE.format(name_of(creditor))
+            await self._quietly(transport.send_text(debtor.wa_user_id, square))
+            return 0
         amount, them = money(cents, currency), name_of(creditor)
-        await transport.send_text(inbound.user_id, MARKED.format(amount, them, them))
-        await transport.send_buttons(
+        marked = MARKED.format(amount, them, them)
+        await self._quietly(transport.send_text(debtor.wa_user_id, marked))
+        await self._quietly(transport.send_buttons(
             creditor.wa_user_id, TOLD.format(name_of(debtor), amount),
             [(f"pay:undo:{received.id}", "Not received")]
-        )
+        ))
+        return cents
+
+    # send a message without failing the payment, a page tap may be outside the chat window
+    async def _quietly(self, send: Awaitable[None]) -> None:
+        try:
+            await send
+        except Exception as error:
+            LOG.warning("settle message failed with %s", type(error).__name__)
 
     # void both sides of a payment that never arrived, only for the person paid
     async def _undo(self, inbound: Inbound, row_id: uuid.UUID, transport: Transport) -> None:

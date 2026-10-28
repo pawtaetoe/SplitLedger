@@ -5,11 +5,12 @@ from typing import Protocol
 PLAIN = "Pay them your usual way, then tap I've paid."
 
 
-# how to pay one person, a line to show and maybe a qr image
+# how to pay one person, a line for the chat, maybe a qr image and a short label for pages
 @dataclass(frozen=True)
 class PayOffer:
     text: str
     qr: bytes | None = None
+    label: str = ""
 
 
 # one way to pay, region packs add their own

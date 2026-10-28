@@ -37,7 +37,7 @@ def test_paynow_offer():
     rail = PayNow()
     offer = rail.offer("6581234567", 1000, "SGD", "SplitLedger K7Q2AB")
     assert offer is not None and offer.qr is not None and offer.qr.startswith(b"\x89PNG")
-    assert "8123 4567" in offer.text
+    assert "8123 4567" in offer.text and offer.label == "PayNow to 8123 4567"
     assert rail.offer("6581234567", 1000, "USD", "x") is None
     assert rail.offer("447700900123", 1000, "SGD", "x") is None
 

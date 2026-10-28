@@ -60,6 +60,7 @@
     {% endfor %}
   </nav>
 
+  {% if paid %}<p class="saved" role="status">Marked as paid. They've been told in WhatsApp, and can say if it hasn't arrived.</p>{% endif %}
   {% if tab == "overview" %}
   <section aria-labelledby="people">
     <h2 id="people">People</h2>
@@ -68,8 +69,18 @@
     {% if people or waiting or owed_soon %}
     <ul class="card">
       {% for b in people %}
+      {% if b.cents < 0 and b.user %}
+      <li class="item stack">
+        <span class="line"><span class="title">{{ b.who }}</span>
+          <span class="amount neg">{{ money(-b.cents, b.currency) }}<span class="who">you owe</span></span></span>
+        {% if pay.get(b.user|string) %}<span class="who">{{ pay[b.user|string] }}, then tap below</span>{% endif %}
+        <form method="post" action="/me/paid"><input type="hidden" name="to" value="{{ b.user }}"><input type="hidden" name="currency" value="{{ b.currency }}">
+          <button type="submit" class="on">I've paid {{ b.who }}</button></form>
+      </li>
+      {% else %}
       <li class="item"><span class="grow title">{{ b.who }}</span>
         <span class="amount {{ 'pos' if b.cents > 0 else 'neg' }}">{{ money(b.cents|abs, b.currency) }}<span class="who">{{ "owes you" if b.cents > 0 else "you owe" }}</span></span></li>
+      {% endif %}
       {% endfor %}
       {% for row in waiting %}
       <li class="item"><span class="grow"><span class="title">{{ row.payer_name or "Whoever paid" }}</span><span class="who">{{ row.bill.vendor or "Open bill" }} · open, waiting for them to close it</span></span>
@@ -162,7 +173,7 @@
   {% endif %}
   {% if board.recent %}
   <details class="card fold">
-    <summary class="item"><span class="grow title">Last {{ board.recent|length }} expenses</span><span class="chev" aria-hidden="true">›</span></summary>
+    <summary class="item"><span class="grow title">{% if board.recent|length == 1 %}Last expense{% else %}Last {{ board.recent|length }} expenses{% endif %}</span><span class="chev" aria-hidden="true">›</span></summary>
     {% for e in board.recent %}
     <div class="item"><span class="date">{{ day(e.occurred_at.astimezone(tz)) }}</span>
       <span class="grow"><span class="title">{{ e.vendor or e.note or e.category }}</span><span class="who">{{ e.category }}</span></span>

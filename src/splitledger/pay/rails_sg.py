@@ -37,4 +37,4 @@ class PayNow:
             f"*PayNow* to {mobile[:4]} {mobile[4:]}, reference {reference}\n"
             "Or save the QR above and scan it from your gallery in your bank app."
         )
-        return PayOffer(text, image.getvalue())
+        return PayOffer(text, image.getvalue(), f"PayNow to {mobile[:4]} {mobile[4:]}")

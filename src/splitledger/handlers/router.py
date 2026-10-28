@@ -319,9 +319,12 @@ logger = ExpenseLogger(llm, SessionFactory, locale, book)
 bills = UpcomingBills(SessionFactory, logger, settings.remind_hour)
 # the bot number friends message to claim, from either provider
 bot_number = settings.whatsapp_bot_number or re.sub(r"\D", "", settings.twilio_whatsapp_from)
+# the pay rails this locale turns on and settling up, shared by the chat and the dashboard
+pay_rails = PayRails(RAILS[settings.locale])
+settle = SettleUp(SessionFactory, pay_rails)
 group = GroupBills(
     SessionFactory, logger, locale, ClaimTokens(settings.app_secret), settings.public_base_url,
-    bot_number, SettleUp(SessionFactory, PayRails(RAILS[settings.locale]))
+    bot_number, settle
 )
 links = DashboardLink(
     SessionFactory, LoginLinks(ClaimTokens(settings.app_secret), LINK_MINUTES * 60),

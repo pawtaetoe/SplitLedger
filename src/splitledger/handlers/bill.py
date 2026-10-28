@@ -63,7 +63,7 @@ NOTHING_OPEN = (
 )
 LEFTOVER_ASK = "*Nobody claimed {}*\nWho pays for {}?"
 SHORT_ASK = "*Only {} of {} people have joined*\nClose anyway? You cover the rest."
-OWED_TO_FRIEND = "*You owe {} {}*\nFor {}. Logged as your {} expense."
+OWED_TO_FRIEND = "*You owe {} {}*\nFor {}. Logged under {} in your spending."
 AUTO_CLOSED = "Everyone has claimed, so I closed it."
 ALL_IN = (
     "*Everyone's in · {}*\n"
@@ -453,7 +453,7 @@ class GroupBills:
     ) -> None:
         bill = closing.bill
         c = bill.currency
-        category = (bill.category or "Other").lower()
+        category = bill.category or "Other"
         mine = next(share.cents for share in closing.shares if share.person.id == closing.payer.id)
         owed = [
             f"- {share.person.guest_name} *{money(share.cents, c)}*"
@@ -462,7 +462,7 @@ class GroupBills:
         text = (
             f"*Bill closed · {bill.vendor or 'Bill'}*\n" + (f"{why}\n" if why else "")
             + f"You paid {money(bill.total, c)}. "
-            f"Your share *{money(mine, c)}* is logged as {category}."
+            f"Your share *{money(mine, c)}* is logged under {category}."
         )
         if owed:
             text += "\n\n*Owed to you*\n" + "\n".join(owed)

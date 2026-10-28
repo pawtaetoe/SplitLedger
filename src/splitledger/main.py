@@ -10,11 +10,11 @@ from splitledger.channels.simulator import dev_router
 from splitledger.channels.twilio import twilio_router
 from splitledger.channels.whatsapp import whatsapp_router
 from splitledger.contracts.transport import Transport
-from splitledger.handlers.router import bills, group
+from splitledger.handlers.router import bills, group, pay_rails, settle
 from splitledger.jobs.reminders import reminder_loop
 from splitledger.settings import settings
 from splitledger.web.claim import claim_page, claim_router
-from splitledger.web.dashboard import dashboard_router
+from splitledger.web.dashboard import dashboard_page, dashboard_router
 from splitledger.web.plan import plan_router
 
 # show our own info logs next to the uvicorn ones
@@ -32,7 +32,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="SplitLedger", lifespan=lifespan)
-claim_page.attach(group, twilio.transport if TWILIO else whatsapp.channel.transport)
+sender: Transport = twilio.transport if TWILIO else whatsapp.channel.transport
+claim_page.attach(group, sender)
+dashboard_page.attach(settle, pay_rails, sender)
 app.include_router(twilio_router if TWILIO else whatsapp_router)
 app.include_router(claim_router)
 app.include_router(dashboard_router)

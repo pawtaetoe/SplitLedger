@@ -25,12 +25,14 @@ Spent = tuple[str, str, int]
 Parts = dict[str, list[tuple[str, int, int]]]
 
 
-# money one person owes or is owed, in one currency
+# money one person owes or is owed, in one currency, with their account when they have one
 @dataclass(frozen=True)
 class Balance:
     who: str
     cents: int
     currency: str
+    user: uuid.UUID | None = None
+    wa: str | None = None
 
 
 # an open shared bill and how far claiming has got
@@ -91,13 +93,19 @@ class Dashboard:
     # one net amount per person and currency, above zero they owe you, below you owe them
     def people(self) -> list[Balance]:
         net: dict[tuple[str, str], int] = {}
-        for balance in self.owed_to_me:
+        account: dict[tuple[str, str], Balance] = {}
+        for balance, sign in [(b, 1) for b in self.owed_to_me] + [(b, -1) for b in self.i_owe]:
             key = (balance.who, balance.currency)
-            net[key] = net.get(key, 0) + balance.cents
-        for balance in self.i_owe:
-            key = (balance.who, balance.currency)
-            net[key] = net.get(key, 0) - balance.cents
-        found = [Balance(who, cents, code) for (who, code), cents in net.items() if cents]
+            net[key] = net.get(key, 0) + sign * balance.cents
+            if balance.user is not None:
+                account[key] = balance
+        found = [
+            Balance(
+                who, cents, code, account[(who, code)].user if (who, code) in account else None,
+                account[(who, code)].wa if (who, code) in account else None
+            )
+            for (who, code), cents in net.items() if cents
+        ]
         return sorted(found, key=lambda balance: -abs(balance.cents))
 
     # your share so far on open bills someone else paid, by currency
@@ -211,18 +219,21 @@ class Overview:
             LedgerEntry.amount_cents < 0
         )
         query = (
-            select(who, LedgerEntry.currency, cents)
+            select(who, LedgerEntry.currency, cents, LedgerEntry.counterparty_id, User.wa_user_id)
             .join(User, LedgerEntry.counterparty_id == User.id, isouter=True)
             .where(
                 LedgerEntry.user_id == user_id, LedgerEntry.voided_at.is_(None),
                 or_(LedgerEntry.kind == kind, and_(settled, side))
             )
-            .group_by(who, LedgerEntry.currency)
+            .group_by(who, LedgerEntry.currency, LedgerEntry.counterparty_id, User.wa_user_id)
             .having(cents != 0)
             .order_by(cents.desc())
         )
         rows = (await session.execute(query)).all()
-        return [Balance(str(name), int(cents), currency) for name, currency, cents in rows]
+        return [
+            Balance(str(name), int(cents), currency, user, wa)
+            for name, currency, cents, user, wa in rows
+        ]
 
     # open bills matching the filters, newest first, with claim progress
     async def _open_bills(

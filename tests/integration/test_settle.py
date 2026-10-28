@@ -92,6 +92,23 @@ async def test_paid_then_undo(sessions):
     assert len(voided) == 2 and all(row.voided_at is not None for row in voided)
 
 
+# the dashboard knows who anna owes so it can offer i've paid, and paying from it settles too
+async def test_pay_from_dashboard(sessions):
+    tommy, anna = await debts(sessions)
+    book = QuotaBook(sessions)
+    board = await Overview(sessions, book).build(anna.id)
+    assert board is not None
+    [owed] = board.people()
+    assert (owed.who, owed.cents, owed.user, owed.wa) == ("Tommy", -600, tommy.id, TOMMY)
+    transport = FakeTransport()
+    settle = SettleUp(sessions, PayRails())
+    assert await settle.pay(anna.id, tommy.id, "SGD", transport) == 600
+    assert await settle.pay(anna.id, tommy.id, "SGD", transport) == 0
+    assert transport.sent_text[-1] == (ANNA, "You're all square with Tommy.")
+    board = await Overview(sessions, book).build(anna.id)
+    assert board is not None and board.people() == []
+
+
 # nothing owed means nothing to pay
 async def test_paid_when_square(sessions):
     tommy, anna = await debts(sessions)

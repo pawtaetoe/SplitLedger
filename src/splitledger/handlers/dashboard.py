@@ -23,7 +23,7 @@ BILL_LINK = (
 )
 WARNING = "_The link works for 15 minutes. Please don't forward it._"
 # added under messages that lead to the dashboard
-SEE_ALL = "See it all on one page:\n{}\n_It signs this phone in. Please don't forward it._"
+SEE_ALL = "See it all on one page:\n{}"
 # what each page is called and what it is for
 PAGES = {
     "me": ("Your dashboard", "Who owes whom, open bills, this month and what's coming up."),

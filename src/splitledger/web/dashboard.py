@@ -1,15 +1,19 @@
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Annotated
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
+from splitledger.contracts.transport import Transport
 from splitledger.db.session import SessionFactory
 from splitledger.handlers.dashboard import COOKIE, COOKIE_DAYS, LINK_MINUTES, PAGES
 from splitledger.handlers.router import book, rates
+from splitledger.handlers.settle import SettleUp
+from splitledger.pay.rails import PayRails
 from splitledger.settings import settings
 from splitledger.split.overview import Overview
 from splitledger.split.tokens import ClaimTokens, LoginLinks
@@ -40,6 +44,15 @@ class DashboardPage:
         self._cookies = LoginLinks(tokens, COOKIE_DAYS * 86400)
         self._overview = overview
         self._secure = secure
+        self._rails = PayRails()
+        self._settle: SettleUp | None = None
+        self._transport: Transport | None = None
+
+    # settling up and the transport that tells both people, set once the app is wired
+    def attach(self, settle: SettleUp, rails: PayRails, transport: Transport) -> None:
+        self._settle = settle
+        self._rails = rails
+        self._transport = transport
 
     # swap the short link for a cookie and go to the dashboard
     # an old link still works on a phone that is already signed in
@@ -80,7 +93,7 @@ class DashboardPage:
             return None
 
     # the dashboard for the signed in user on one tab, or how to sign in
-    async def show(self, request: Request, tab: str = "overview") -> HTMLResponse:
+    async def show(self, request: Request, tab: str = "overview", paid: str = "") -> HTMLResponse:
         user_id = self.user_of(request)
         board = await self._overview.build(user_id) if user_id else None
         if board is None:
@@ -93,10 +106,28 @@ class DashboardPage:
             open_bill.bill.code: f"/c/{self._tokens.make(open_bill.bill.code, datetime.now(UTC))}"
             for open_bill in [*board.paid, *board.joined]
         }
+        pay = {
+            str(b.user): self._rails.offer(b.wa, -b.cents, b.currency, "SplitLedger").label
+            for b in board.people() if b.cents < 0 and b.user and b.wa
+        }
         return render(
             "dashboard.html", board=board, links=links, tz=ZoneInfo(board.user.timezone),
-            tab=tab if tab in TABS else "overview", tabs=TABS
+            tab=tab if tab in TABS else "overview", tabs=TABS, pay=pay, paid=paid
         )
+
+    # i've paid from the page, the same as the chat button, both people get a message
+    async def paid(self, request: Request, to: str, currency: str) -> Response:
+        user_id = self.user_of(request)
+        if user_id is None:
+            return render("message.html", 401, title=SIGN_IN[0], body=SIGN_IN[1])
+        try:
+            creditor = uuid.UUID(to)
+        except ValueError:
+            return RedirectResponse("/me", 303)
+        if self._settle is None or self._transport is None:
+            return RedirectResponse("/me", 303)
+        cents = await self._settle.pay(user_id, creditor, currency, self._transport)
+        return RedirectResponse(f"/me?paid={quote(currency)}" if cents else "/me", 303)
 
 
 overview = Overview(SessionFactory, book, rates)
@@ -116,5 +147,13 @@ async def sign_in(token: str, request: Request, to: str = "me") -> Response:
 
 # the dashboard
 @dashboard_router.get("/me", response_class=HTMLResponse)
-async def me(request: Request, tab: str = "overview") -> HTMLResponse:
-    return await dashboard_page.show(request, tab)
+async def me(request: Request, tab: str = "overview", paid: str = "") -> HTMLResponse:
+    return await dashboard_page.show(request, tab, paid)
+
+
+# i've paid from the dashboard
+@dashboard_router.post("/me/paid")
+async def paid(
+    request: Request, to: Annotated[str, Form()], currency: Annotated[str, Form()]
+) -> Response:
+    return await dashboard_page.paid(request, to, currency)
