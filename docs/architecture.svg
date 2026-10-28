@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" width="960" height="500" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#4b5563"/>
+    </marker>
+    <style>
+      .box { fill: #ffffff; stroke: #9ca3af; stroke-width: 1.5; rx: 10; }
+      .meta { fill: #e8f0fe; stroke: #1a73e8; stroke-width: 1.5; rx: 10; }
+      .core { fill: #ecfdf3; stroke: #16a34a; stroke-width: 1.5; rx: 10; }
+      .h { font-size: 16px; font-weight: bold; fill: #111827; }
+      .t { font-size: 12.5px; fill: #374151; }
+      .l { font-size: 11.5px; fill: #6b7280; font-style: italic; }
+      .ln { stroke: #4b5563; stroke-width: 1.5; fill: none; marker-end: url(#a); }
+    </style>
+  </defs>
+  <rect width="960" height="500" fill="#f9fafb"/>
+
+  <rect class="box" x="20" y="40" width="160" height="90"/>
+  <text class="h" x="36" y="68">WhatsApp</text>
+  <text class="t" x="36" y="90">text, voice note,</text>
+  <text class="t" x="36" y="107">photo or a tap</text>
+
+  <rect class="box" x="215" y="40" width="160" height="90"/>
+  <text class="h" x="231" y="68">Transport</text>
+  <text class="t" x="231" y="90">Twilio sandbox or</text>
+  <text class="t" x="231" y="107">WhatsApp Cloud API</text>
+
+  <rect class="box" x="410" y="40" width="160" height="90"/>
+  <text class="h" x="426" y="68">FastAPI webhook</text>
+  <text class="t" x="426" y="90">replies 200 at once,</text>
+  <text class="t" x="426" y="107">work runs after</text>
+
+  <rect class="core" x="605" y="40" width="150" height="90"/>
+  <text class="h" x="621" y="68">Router</text>
+  <text class="t" x="621" y="90">buttons and words first,</text>
+  <text class="t" x="621" y="107">then one model read</text>
+
+  <rect class="core" x="790" y="40" width="150" height="250"/>
+  <text class="h" x="806" y="68">Handlers</text>
+  <text class="t" x="806" y="94">log and undo</text>
+  <text class="t" x="806" y="116">voice and receipts</text>
+  <text class="t" x="806" y="138">ask with tools</text>
+  <text class="t" x="806" y="160">budget plans</text>
+  <text class="t" x="806" y="182">can I afford it</text>
+  <text class="t" x="806" y="204">upcoming bills</text>
+  <text class="t" x="806" y="226">group bill</text>
+  <text class="t" x="806" y="248">claim by numbers</text>
+  <text class="t" x="806" y="270">dashboard link</text>
+
+  <rect class="meta" x="410" y="180" width="345" height="100"/>
+  <text class="h" x="426" y="208">Meta Model API</text>
+  <text class="t" x="426" y="232">Muse Spark: read messages, receipts, tool calls,</text>
+  <text class="t" x="426" y="250">claims in words, custom plans</text>
+  <text class="t" x="426" y="268">Muse Voice Transcribe: voice notes</text>
+
+  <rect class="box" x="790" y="340" width="150" height="110"/>
+  <text class="h" x="806" y="368">Postgres</text>
+  <text class="t" x="806" y="392">users, expenses</text>
+  <text class="t" x="806" y="410">ledgers in cents</text>
+  <text class="t" x="806" y="428">bills, claims, plans</text>
+
+  <rect class="box" x="215" y="340" width="540" height="110"/>
+  <text class="h" x="231" y="368">Web pages (Jinja and HTMX)</text>
+  <text class="t" x="231" y="392">claim page: tick your dishes, autosaves</text>
+  <text class="t" x="231" y="410">dashboard: who owes whom, bills, this month</text>
+  <text class="t" x="231" y="428">plan form: every choice on one page</text>
+
+  <rect class="box" x="215" y="180" width="160" height="100"/>
+  <text class="h" x="231" y="208">Reminder loop</text>
+  <text class="t" x="231" y="230">every 60 seconds:</text>
+  <text class="t" x="231" y="248">bills due, bill nudges,</text>
+  <text class="t" x="231" y="266">auto close</text>
+
+  <path class="ln" d="M180 85 H213"/>
+  <path class="ln" d="M375 85 H408"/>
+  <path class="ln" d="M570 85 H603"/>
+  <path class="ln" d="M755 85 H788"/>
+  <path class="ln" d="M790 230 H757"/>
+  <path class="ln" d="M865 290 V338"/>
+  <path class="ln" d="M295 180 V132"/>
+  <path class="ln" d="M755 395 H788"/>
+  <path class="ln" d="M100 130 V395 H213"/>
+  <path class="ln" d="M215 120 L180 120"/>
+  <text class="l" x="108" y="300">link opens</text>
+  <text class="l" x="108" y="315">in the browser</text>
+  <text class="l" x="20" y="160">replies and buttons</text>
+  <text class="l" x="20" y="480">The models read. Python checks every number before it is saved.</text>
+</svg>

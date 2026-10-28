@@ -7,3 +7,5 @@ __pycache__
 pgdata
 *.pyc
 docs/*
+!docs/architecture.svg
+!docs/DEPLOY.md
