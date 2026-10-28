@@ -12,6 +12,7 @@ from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import BudgetPlan, User
+from splitledger.handlers.dashboard import DashboardLink
 from splitledger.handlers.log import ensure_user, money
 from splitledger.llm.schemas import CustomPlan, Locale
 from splitledger.plans.custom import check_plan, fits_income
@@ -73,15 +74,16 @@ class Draft:
 
 # plan set up, display and removal over a few button taps
 class PlanManager:
-    # sessions, the quota book, the locale for new users and the model for own plans
+    # sessions, the quota book, the locale for new users, the model for own plans and page links
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], book: QuotaBook, locale: Locale,
-        llm: LLM
+        llm: LLM, links: DashboardLink | None = None
     ) -> None:
         self._sessions = sessions
         self._book = book
         self._locale = locale
         self._llm = llm
+        self._links = links
         self._drafts: dict[str, Draft] = {}
 
     # greet someone the first time they ever message
@@ -314,6 +316,8 @@ class PlanManager:
             await session.commit()
         self._drafts.pop(inbound.user_id, None)
         text = "✅ *Plan saved*\nEach time you log, I'll show what's left."
+        if self._links is not None:
+            text += "\n\n" + self._links.see_all(user_id)
         await transport.send_text(inbound.user_id, text)
 
     # delete the plan, spending records are untouched

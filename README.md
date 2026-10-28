@@ -22,6 +22,7 @@ Built for the Meta Global AI Developer Hackathon (Indie track)
 | `how much did I spend on food this month?` | a total and the top items, from the database |
 | `can I afford a 300 hotel?` | spent, still due, really left, a rule of thumb |
 | `menu` | every action as a tap choice, including My dashboard |
+| tap **See it all** under Bill closed, You owe or Plan saved | your dashboard, signed in for 30 days, can be added to the home screen |
 
 ## Which Meta model does what
 

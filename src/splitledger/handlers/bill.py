@@ -12,11 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import Bill, BillItem, BillStatus, ItemClaim, Participant, User
+from splitledger.handlers.dashboard import LINK_MINUTES, SEE_ALL, dashboard_url
 from splitledger.handlers.log import ExpenseLogger, ensure_user, money, receipt_adds_up
 from splitledger.handlers.settle import OWE_ALL, SettleUp
 from splitledger.llm.schemas import Locale, ReceiptDraft
 from splitledger.split.finalise import BillCloser, Closing, Leftovers
-from splitledger.split.tokens import ClaimTokens
+from splitledger.split.tokens import ClaimTokens, LoginLinks
 
 LOG = logging.getLogger(__name__)
 # days a bill can still be closed in words without its button
@@ -163,6 +164,7 @@ class GroupBills:
         self._base_url = base_url.rstrip("/")
         self._bot_number = bot_number
         self._closer = BillCloser(sessions)
+        self._me = LoginLinks(tokens, LINK_MINUTES * 60)
         self._settle = settle
 
     # read the photo, check it can be split, save the bill and send the forwardable message
@@ -465,7 +467,7 @@ class GroupBills:
         )
         if owed:
             text += "\n\n*Owed to you*\n" + "\n".join(owed)
-        await transport.send_text(payer_wa, text)
+        await transport.send_text(payer_wa, f"{text}\n\n{self._see_all(bill.payer_id)}")
         friends = [s.person.user_id for s in closing.shares if s.person.user_id and s.cents]
         async with self._sessions() as session:
             users = {
@@ -481,14 +483,21 @@ class GroupBills:
                 continue
             amount = money(share.cents, c)
             text = OWED_TO_FRIEND.format(closing.payer.guest_name, amount, what, category)
+            footer = self._see_all(user.id)
             try:
                 if self._settle is not None and payer is not None:
-                    reference = f"SplitLedger {bill.code}"
-                    await self._settle.ask(transport, user, payer, c, text, share.cents, reference)
+                    await self._settle.ask(
+                        transport, user, payer, c, text, share.cents, f"SplitLedger {bill.code}",
+                        footer
+                    )
                 else:
-                    await transport.send_buttons(user.wa_user_id, text, [OWE_ALL])
+                    await transport.send_buttons(user.wa_user_id, f"{text}\n\n{footer}", [OWE_ALL])
             except Exception as error:
                 LOG.warning("owed message failed with %s", type(error).__name__)
+
+    # the see it all line with a sign in link for one user
+    def _see_all(self, user_id: uuid.UUID) -> str:
+        return SEE_ALL.format(dashboard_url(self._base_url, self._me, user_id))
 
     # save the bill, its items and the payer as the first participant, retrying a code clash
     async def _create(

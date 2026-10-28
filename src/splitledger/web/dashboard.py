@@ -23,7 +23,8 @@ EXPIRED = (
 )
 SIGN_IN = (
     "Open your dashboard from WhatsApp",
-    "Send menu to the bot and tap My dashboard. The link signs this phone in for 30 days."
+    "Tap below to message the bot, then send. It replies with a link that signs this phone "
+    "in for 30 days."
 )
 
 
@@ -83,7 +84,11 @@ class DashboardPage:
         user_id = self.user_of(request)
         board = await self._overview.build(user_id) if user_id else None
         if board is None:
-            return render("message.html", 401, title=SIGN_IN[0], body=SIGN_IN[1])
+            action = f"https://wa.me/{self._bot_number}?text=dashboard"
+            return render(
+                "message.html", 401, title=SIGN_IN[0], body=SIGN_IN[1], action=action,
+                action_label="Get a link"
+            )
         links = {
             open_bill.bill.code: f"/c/{self._tokens.make(open_bill.bill.code, datetime.now(UTC))}"
             for open_bill in [*board.paid, *board.joined]

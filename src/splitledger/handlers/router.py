@@ -331,7 +331,7 @@ message_router = Router(
     logger,
     MessageReader(llm, locale),
     SpendAssistant(llm, SessionFactory, book, AFFORD_RULES[settings.locale]),
-    PlanManager(SessionFactory, book, locale, llm),
+    PlanManager(SessionFactory, book, locale, llm, links),
     bills,
     group,
     ClaimChat(SessionFactory, llm, ClaimBook(SessionFactory), locale, links),

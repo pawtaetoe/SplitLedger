@@ -48,6 +48,7 @@ def test_sign_in_pages(monkeypatch):
     assert "wa.me/6512345678?text=CLAIM%20K7Q2AB" in old_bill.text
     response = web.get("/me")
     assert response.status_code == 401 and "Open your dashboard from WhatsApp" in response.text
+    assert "https://wa.me/" in response.text and "Get a link" in response.text
     fresh = LoginLinks(ClaimTokens("secret"), 900).make(str(uuid.uuid4()), datetime.now(UTC))
     response = web.get(f"/d/{fresh}", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/me"

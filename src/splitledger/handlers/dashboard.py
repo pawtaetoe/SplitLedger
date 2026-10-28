@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,6 +22,8 @@ BILL_LINK = (
     "Send _menu_ any time to see what else I can do."
 )
 WARNING = "_The link works for 15 minutes. Please don't forward it._"
+# added under messages that lead to the dashboard
+SEE_ALL = "See it all on one page:\n{}\n_It signs this phone in. Please don't forward it._"
 # what each page is called and what it is for
 PAGES = {
     "me": ("Your dashboard", "Who owes whom, open bills, this month and what's coming up."),
@@ -31,6 +34,11 @@ PAGES = {
 # links that open one bill as one person for two weeks, and nothing else
 def bill_links(tokens: ClaimTokens, code: str) -> LoginLinks:
     return LoginLinks(tokens, BILL_DAYS * 86400, f"bill-{code.upper()}")
+
+
+# a short lived link that signs this user in and opens their dashboard
+def dashboard_url(base_url: str, links: LoginLinks, user_id: uuid.UUID) -> str:
+    return f"{base_url.rstrip('/')}/d/{links.make(str(user_id), datetime.now(UTC))}"
 
 
 # sends a short lived sign in link to the user's own dashboard
@@ -54,6 +62,10 @@ class DashboardLink:
         title, what = PAGES[page]
         url = f"{self._base_url}/d/{token}" + ("" if page == "me" else f"?to={page}")
         await transport.send_text(inbound.user_id, f"*{title}*\n{url}\n\n{what}\n{WARNING}")
+
+    # the see it all line for this user, to add under a message
+    def see_all(self, user_id: uuid.UUID) -> str:
+        return SEE_ALL.format(dashboard_url(self._base_url, self._links, user_id))
 
     # a personal link that opens one bill as this user for two weeks
     async def bill_url(self, inbound: Inbound, code: str) -> str:
