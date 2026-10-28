@@ -107,6 +107,7 @@ async def test_demo(sessions):
     assert not any(to == ANNA and body.startswith("*Hi!") for to, body, _ in transport.sent_buttons)
     await router.handle(text(ANNA, "2", "Anna"), transport)
     assert last(transport, ANNA).startswith("*Your share so far · SGD 10.00*")
+    assert last(transport, ANNA).endswith("I'll message you when the bill closes.")
     await router.handle(text(BEN, f"CLAIM {bill.code} 3, 4", "Ben"), transport)
     assert last(transport, BEN).startswith("*Your share so far · SGD 20.00*")
 

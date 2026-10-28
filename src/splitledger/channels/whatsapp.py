@@ -15,7 +15,6 @@ from splitledger.contracts.transport import Transport
 from splitledger.db.models import ProcessedMessage
 from splitledger.db.session import SessionFactory
 from splitledger.handlers.router import Router, message_router
-from splitledger.jobs.queue import JobQueue
 from splitledger.settings import settings
 
 GRAPH_BASE = "https://graph.facebook.com/v21.0"
@@ -162,12 +161,11 @@ class WhatsAppTransport:
             return download.content
 
 
-# webhook side, dedupe then queue then route
+# webhook side, dedupe then route
 class WhatsAppChannel:
     # wire one transport to a message router
     def __init__(self, transport: Transport, router: Router) -> None:
         self.transport = transport
-        self.queue = JobQueue()
         self._router = router
 
     # claim a message id in the db, false when already seen
@@ -185,10 +183,6 @@ class WhatsAppChannel:
     async def handle(self, inbound: Inbound) -> None:
         await self._router.handle(inbound, self.transport)
 
-    # drain the queue through the router
-    async def process_queued(self) -> None:
-        await self.queue.process_all(self.handle)
-
 
 channel = WhatsAppChannel(WhatsAppTransport(), message_router)
 whatsapp_router = APIRouter()
@@ -205,7 +199,7 @@ async def verify(request: Request) -> PlainTextResponse:
     return PlainTextResponse("forbidden", status_code=403)
 
 
-# accept one signed webhook delivery and queue its messages
+# accept one signed webhook delivery and route its messages after replying
 @whatsapp_router.post("/webhook/whatsapp")
 async def webhook(request: Request, background: BackgroundTasks) -> dict[str, bool]:
     body = await request.body()
@@ -218,6 +212,5 @@ async def webhook(request: Request, background: BackgroundTasks) -> dict[str, bo
         return {"ok": True}
     for inbound in parse_inbound(payload):
         if await channel.claim(inbound.message_id):
-            await channel.queue.enqueue(inbound)
-    background.add_task(channel.process_queued)
+            background.add_task(channel.handle, inbound)
     return {"ok": True}

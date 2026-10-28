@@ -125,7 +125,7 @@ async def test_afford_caveat_and_pay(sessions):
     result = await tools.can_afford(
         {"kind": "car", "monthly_payment": 900, "running_costs": 600, "take_home": 4500}
     )
-    assert result["answer"] == "no" and result["income_needed"] == "SGD 15000.00"
+    assert result["answer"] == "no" and result["income_needed"] == "SGD 15,000.00"
     async with sessions() as session:
         stored = (await session.execute(select(User.take_home_cents).where(User.id == me.id)))
         assert stored.scalar_one() == 450000
@@ -137,13 +137,13 @@ async def test_upcoming_round_trip(sessions):
     tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)
     today = datetime.now(SG).date().isoformat()
     rent = {"label": "rent", "amount": 1200, "every": "month", "on": today, "remind": True}
-    assert (await tools.add_upcoming(rent))["amount"] == "SGD 1200.00"
+    assert (await tools.add_upcoming(rent))["amount"] == "SGD 1,200.00"
     assert tools.added[0][1] is True
     listed = await tools.list_upcoming({})
     assert listed["upcoming"][0]["what"] == "rent"
-    assert listed["still_to_pay_this_month"] == "SGD 1200.00"
+    assert listed["still_to_pay_this_month"] == "SGD 1,200.00"
     result = await tools.can_afford({"kind": "purchase", "price": 300, "take_home": 4500})
-    assert "Still to pay this month: SGD 1200.00 for rent." in result["facts"]
+    assert "Still to pay this month: SGD 1,200.00 for rent." in result["facts"]
     past = {"label": "gift", "amount": 50, "every": "once", "on": "2020-01-01"}
     with pytest.raises(ValueError):
         await tools.add_upcoming(past)

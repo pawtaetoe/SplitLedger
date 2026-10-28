@@ -43,7 +43,7 @@ async def test_welcome_once(sessions):
     await plans.welcome_if_new(msg("text", "hi"), transport)
     await plans.welcome_if_new(msg("text", "hi again"), transport)
     assert len(transport.sent_buttons) == 1
-    assert transport.sent_buttons[0][2][0] == ("plan:setup", "Set up a plan")
+    assert transport.sent_buttons[0][2][0] == ("menu:split", "Split a bill")
 
 
 # set up saves the plan and income and shows weekly shares before saving
@@ -134,7 +134,7 @@ async def test_own_plan_with_a_limit(sessions):
     await plans.on_text(msg("text", "save 30%, food under 400 a month"), transport)
     await plans.on_text(msg("text", "4500"), transport)
     confirm = transport.sent_buttons[-1][1]
-    assert "- Food: *USD 400.00*\n- Savings: *USD 1350.00*" in confirm
+    assert "- Food: *USD 400.00*\n- Savings: *USD 1,350.00*" in confirm
     untracked = "transport, shopping, bills, entertainment, health, travel, other"
     assert f"_Not tracked: {untracked}._" in confirm
     assert "_Your own plan, drafted with Muse Spark_" in confirm

@@ -38,7 +38,7 @@ def test_car_worked_example():
     })
     core = assess(ask, pay(), CORE_RULES)
     assert core["answer"] == "no"
-    assert core["income_needed"] == "SGD 15000.00"
+    assert core["income_needed"] == "SGD 15,000.00"
     assert core["strictest"] == "20/4/10: car costs at most 10% of pay"
     assert check(core, "20/4/10: at least 20% down")["result"] == "pass"
     assert check(core, "20/4/10: loan of 4 years")["result"] == "fail"
@@ -46,7 +46,7 @@ def test_car_worked_example():
     down = check(singapore, "MAS: at least 40% down")
     assert down["result"] == "fail" and "OMV above S$20,000" in down["note"]
     assert check(singapore, "MAS: car loan of 7 years")["result"] == "pass"
-    assert check(singapore, "MAS TDSR")["needs"] == "SGD 1636.37"
+    assert check(singapore, "MAS TDSR")["needs"] == "SGD 1,636.37"
 
 
 # a cheap car gets the 70 percent loan, so 30 percent down passes
@@ -68,10 +68,10 @@ def test_home_rules():
         "kind": "home", "monthly_payment": 2000, "other_monthly_debt": 500, "property_type": "hdb"
     })
     result = assess(ask, pay(gross=800000), SG_ALL)
-    assert check(result, "28/36: housing")["needs"] == "SGD 7142.86"
-    assert check(result, "28/36: all debt")["needs"] == "SGD 6944.45"
-    assert check(result, "MAS MSR")["needs"] == "SGD 6666.67"
-    assert check(result, "MAS TDSR")["needs"] == "SGD 4545.46"
+    assert check(result, "28/36: housing")["needs"] == "SGD 7,142.86"
+    assert check(result, "28/36: all debt")["needs"] == "SGD 6,944.45"
+    assert check(result, "MAS MSR")["needs"] == "SGD 6,666.67"
+    assert check(result, "MAS TDSR")["needs"] == "SGD 4,545.46"
     assert result["answer"] == "yes"
     assert result["strictest"] == "28/36: housing at most 28% of pay"
     assert "MAS" not in str(assess(ask, pay(gross=800000), CORE_RULES))
@@ -133,10 +133,10 @@ def test_purchase_facts_without_plan():
     result = assess(ask, Means("SGD", 450000, None, None, spending), CORE_RULES)
     assert result["answer"] == "your call"
     assert result["facts"] == [
-        "SGD 300.00 is about 6% of a month's pay (SGD 4500.00).",
-        "Spent so far this month: SGD 1200.00.",
-        "Left this month: SGD 3300.00. This is about 9% of it.",
-        "A usual month costs you SGD 3200.00.",
+        "SGD 300.00 is about 6% of a month's pay (SGD 4,500.00).",
+        "Spent so far this month: SGD 1,200.00.",
+        "Left this month: SGD 3,300.00. This is about 9% of it.",
+        "A usual month costs you SGD 3,200.00.",
         "So far this month: SGD 50.00 on travel, against a usual SGD 200.00."
     ]
 
@@ -149,11 +149,11 @@ def test_purchase_facts_with_upcoming():
     ahead = outlook(PLANS, TODAY)
     facts = assess(ask, Means("SGD", 450000, None, None, spending, ahead), CORE_RULES)["facts"]
     assert facts[:6] == [
-        "SGD 300.00 is about 6% of a month's pay (SGD 4500.00).",
-        "Spent so far this month: SGD 1200.00.",
+        "SGD 300.00 is about 6% of a month's pay (SGD 4,500.00).",
+        "Spent so far this month: SGD 1,200.00.",
         "Still to pay this month: SGD 570.00 for trip, phone, gym.",
-        "Left this month after bills: SGD 2730.00. This is about 10% of it.",
-        "Repeating bills come to about SGD 1336.66 a month.",
+        "Left this month after bills: SGD 2,730.00. This is about 10% of it.",
+        "Repeating bills come to about SGD 1,336.66 a month.",
         "Coming up later: present SGD 150.00 on 3 Dec."
     ]
     tight = assess(ask, Means("SGD", 200000, None, None, spending, ahead), CORE_RULES)["facts"]

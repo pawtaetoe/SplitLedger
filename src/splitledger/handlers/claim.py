@@ -36,6 +36,7 @@ NO_BILL = "*Which bill?*\nSend _CLAIM_ and the code from the bill message, like 
 NO_MATCH = "*I couldn't match that to the bill*\nReply with item numbers, like _CLAIM {} 1,3_."
 BAD_NUMBERS = "*Those numbers aren't on the bill*\nPick from 1 to {}."
 CHANGE = "*Tell me again*\nLike _Anna and Ben shared the calamari, I had the pasta_."
+DONE = "That's all you need to do. I'll message you when the bill closes."
 NOTHING = "Nothing to save. Send the bill code again, like _CLAIM K7Q2AB_."
 
 
@@ -196,7 +197,7 @@ class ClaimChat:
         text = (
             f"{title}\n" + "\n".join(lines)
             + "\n\n*Reply with the numbers you had*, like _2, 6_.\n"
-            "Shared something? Say it, like _I shared the calamari with Anna_."
+            "Shared a dish? Pick its number too, then tap I shared it."
             + (f"\n\nOr tick them on a page:\n{link}" if link else "")
         )
         free = [(n, line) for n, line in enumerate(view.lines, 1) if not line.holders]
@@ -249,7 +250,7 @@ class ClaimChat:
         mine = [f"- {line.name}" for line in view.lines if line.mine] or ["Nothing yet"]
         text = f"*Your share so far · {money(view.share, bill.currency)}*\n" + "\n".join(mine)
         if not taken:
-            await transport.send_text(inbound.user_id, text)
+            await transport.send_text(inbound.user_id, f"{text}\n\n{DONE}")
             return
         notes = [f"{line.name} is taken by {line.holders[0]}" for _, line in taken]
         buttons = [

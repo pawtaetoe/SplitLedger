@@ -50,6 +50,12 @@ class MetaLLM:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._key}"}
 
+    # log the api's own reason before raising, it never holds the key
+    def _check(self, response: httpx.Response) -> None:
+        if response.is_error:
+            LOG.warning("model api %s: %s", response.status_code, response.text[:300])
+        response.raise_for_status()
+
     # post with retries on transient failures
     async def _post(self, url: str, **kwargs: Any) -> httpx.Response:
         for attempt in range(3):
@@ -75,7 +81,7 @@ class MetaLLM:
         if tools:
             payload["tools"] = tools
         response = await self._post(f"{self._base}/chat/completions", json=payload)
-        response.raise_for_status()
+        self._check(response)
         message: dict[str, Any] = response.json()["choices"][0]["message"]
         return message
 
@@ -173,5 +179,5 @@ class MetaLLM:
         response = await self._post(
             f"{self._base}/asr/transcribe", files={"file": ("audio", audio, mime)}
         )
-        response.raise_for_status()
+        self._check(response)
         return str(response.json().get("text", ""))

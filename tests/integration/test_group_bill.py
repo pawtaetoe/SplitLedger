@@ -1,5 +1,3 @@
-from datetime import UTC, datetime
-
 from sqlalchemy import select
 
 from splitledger.contracts.messages import Inbound
@@ -55,8 +53,7 @@ async def test_bill_from_receipt(sessions):
     ready, forward = transport.sent_buttons[-1][1], transport.sent_text[-1][1]
     assert ready == bill_module.READY.format(bill.code)
     assert f"https://wa.me/6512345678?text=CLAIM%20{bill.code}" in forward
-    token = forward.split("https://sl.test/c/")[1].split("\n")[0]
-    assert ClaimTokens("secret").read(token, datetime.now(UTC)) == bill.code
+    assert "https://sl.test/c/" not in forward
 
 
 # receipts without items or that don't add up make no bill

@@ -117,7 +117,7 @@ async def ensure_user(
 
 # money for a reply line, the code reads clearly in any country
 def money(cents: int, currency: str) -> str:
-    return f"{currency} {cents // 100}.{cents % 100:02d}"
+    return f"{currency} {cents // 100:,}.{cents % 100:02d}"
 
 
 # logs text and receipt expenses and undoes them

@@ -53,7 +53,7 @@ async def test_send_due(sessions):
     assert await bills.send_due(transport, NOW) == 1
     assert await bills.send_due(transport, NOW + timedelta(minutes=10)) == 0
     _, text, buttons = transport.sent_buttons[-1]
-    assert text == "*Reminder: rent SGD 1800.00*\nDue tomorrow, Sat 31 Oct."
+    assert text == "*Reminder: rent SGD 1,800.00*\nDue tomorrow, Sat 31 Oct."
     assert buttons[0] == (f"bills:paid:{rent.id}:{DUE}", "Paid it")
 
 
@@ -80,7 +80,7 @@ async def test_show_and_undo(sessions):
     bills = handler(sessions)
     transport = FakeTransport()
     await bills.show(tap("menu:bills"), transport)
-    assert transport.sent_text[-1][1].startswith("*Upcoming bills*\n- rent *SGD 1800.00*")
+    assert transport.sent_text[-1][1].startswith("*Upcoming bills*\n- rent *SGD 1,800.00*")
     stranger = Inbound("m2", "6599999999", "button")
     undo = f"bills:undo:{rent.id}"
     await bills.on_button(stranger, undo, transport)

@@ -21,9 +21,10 @@ from splitledger.plans.quota import QuotaBook
 from splitledger.plans.store import plan_amounts, save_plan
 
 WELCOME = (
-    "*Hi! I keep track of what you spend.*\n"
-    "Type what you bought, like _coffee 4.50_.\n"
-    "Or send a receipt photo or a voice note."
+    "*Hi! I help with your money, right here in WhatsApp.*\n"
+    "- *Log spending:* type it, like _coffee 4.50_, or send a receipt photo or voice note\n"
+    "- *Split a bill:* send the receipt photo with the caption _split_\n"
+    "- *Plan:* set a budget and I'll show what's left after each log"
 )
 LOG = logging.getLogger(__name__)
 PROMPT = (Path(__file__).parents[1] / "llm" / "prompts" / "custom_plan.md").read_text(
@@ -92,7 +93,10 @@ class PlanManager:
             _, created = await ensure_user(session, inbound.user_id, self._locale)
             await session.commit()
         if created:
-            choices = [("plan:setup", "Set up a plan"), ("menu:open", "See what I can do")]
+            choices = [
+                ("menu:split", "Split a bill"), ("plan:setup", "Set up a plan"),
+                ("menu:open", "See what I can do")
+            ]
             await transport.send_buttons(inbound.user_id, WELCOME, choices)
 
     # true while we are waiting for a typed plan or income reply

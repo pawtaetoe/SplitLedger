@@ -179,7 +179,7 @@ channel = WhatsAppChannel(transport, message_router)
 twilio_router = APIRouter()
 
 
-# accept one signed twilio delivery and queue its message
+# accept one signed twilio delivery and route its message after replying
 @twilio_router.post("/webhook/twilio")
 async def webhook(request: Request, background: BackgroundTasks) -> Response:
     params = dict(parse_qsl((await request.body()).decode(), keep_blank_values=True))
@@ -189,8 +189,7 @@ async def webhook(request: Request, background: BackgroundTasks) -> Response:
         raise HTTPException(status_code=403, detail="bad signature")
     inbound = parse_inbound(params)
     if inbound is not None and await channel.claim(inbound.message_id):
-        await channel.queue.enqueue(transport.apply_menu(inbound))
-        background.add_task(channel.process_queued)
+        background.add_task(channel.handle, transport.apply_menu(inbound))
     return Response("<Response/>", media_type="application/xml")
 
 

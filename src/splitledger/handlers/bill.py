@@ -43,13 +43,13 @@ NOT_ADDING_UP = (
 )
 READY = (
     "*Bill ready · code {}*\n"
-    "Forward the next message to your group. Each friend taps what they had.\n"
-    "Tap Close the bill once everyone has claimed."
+    "Forward the next message to your group. Each friend replies with what they had.\n"
+    "It closes by itself once everyone's in, and everyone is told what they owe."
 )
 READY_EVEN = (
     "*Split {} ways · code {}*\n"
     "Each friend pays *{}* and your share is *{}*.\n"
-    "Forward the next message to your group, then tap Close the bill."
+    "Forward the next message to your group. It closes by itself once everyone has joined."
 )
 UNKNOWN = "*I can't find that bill*\nSend a new receipt photo with the caption _split_."
 NOT_PAYER = "*Only the person who paid can change this bill*"
@@ -95,7 +95,7 @@ def new_code(taken: Collection[str] = ()) -> str:
 
 
 # the message friends get, items numbered so they can claim by number too
-def forward_text(bill: Bill, items: list[BillItem], claim_url: str, chat_url: str) -> str:
+def forward_text(bill: Bill, items: list[BillItem], chat_url: str) -> str:
     c = bill.currency
     title = f"*{bill.vendor} · {money(bill.total, c)}*" if bill.vendor else (
         f"*Bill · {money(bill.total, c)}*"
@@ -107,9 +107,9 @@ def forward_text(bill: Bill, items: list[BillItem], claim_url: str, chat_url: st
     charges = bill.service + bill.tax - bill.discount
     extra = f"\nService, tax and discounts: {money(charges, c)}" if charges else ""
     return (
-        f"{title}\nTap what you had and I'll work out your share.\n\n"
+        f"{title}\nTap the link, send the message, then reply with the numbers you had.\n\n"
         + "\n".join(lines) + extra
-        + f"\n\n*Claim in WhatsApp*\n{chat_url}\n\n*See the bill*\n{claim_url}"
+        + f"\n\n*Claim in WhatsApp*\n{chat_url}"
     )
 
 
@@ -120,14 +120,14 @@ def even_share(total: int, ways: int) -> tuple[int, int]:
 
 
 # the message friends get for an even split
-def even_text(bill: Bill, claim_url: str, chat_url: str) -> str:
+def even_text(bill: Bill, chat_url: str) -> str:
     ways = bill.even_ways or 1
     each, _ = even_share(bill.total, ways)
     where = f"{bill.vendor} · " if bill.vendor else "Bill · "
     return (
         f"*{where}{money(bill.total, bill.currency)}*\n"
         f"Split evenly {ways} ways: *{money(each, bill.currency)}* each.\n\n"
-        f"*Say you're in, in WhatsApp*\n{chat_url}\n\n*See the bill*\n{claim_url}"
+        f"*Say you're in, in WhatsApp*\n{chat_url}"
     )
 
 
@@ -228,7 +228,6 @@ class GroupBills:
     async def _send(
         self, inbound: Inbound, transport: Transport, bill: Bill, items: list[BillItem]
     ) -> None:
-        claim_url = f"{self._base_url}/c/{self._tokens.make(bill.code, datetime.now(UTC))}"
         chat_url = f"https://wa.me/{self._bot_number}?text={quote(f'CLAIM {bill.code}')}"
         if bill.even_ways:
             each, mine = even_share(bill.total, bill.even_ways)
@@ -236,10 +235,10 @@ class GroupBills:
                 bill.even_ways, bill.code, money(each, bill.currency), money(mine, bill.currency)
             )
             await transport.send_buttons(inbound.user_id, ready, close_button(bill))
-            await transport.send_text(inbound.user_id, even_text(bill, claim_url, chat_url))
+            await transport.send_text(inbound.user_id, even_text(bill, chat_url))
             return
         await transport.send_buttons(inbound.user_id, READY.format(bill.code), close_button(bill))
-        await transport.send_text(inbound.user_id, forward_text(bill, items, claim_url, chat_url))
+        await transport.send_text(inbound.user_id, forward_text(bill, items, chat_url))
 
     # close by button: the first tap, then leftovers or a short even split answered
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:

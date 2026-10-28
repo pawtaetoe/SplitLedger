@@ -72,11 +72,11 @@ class SettleUp:
         text = header
         if cents != share:
             text += "\n" + EARLIER.format(money(cents, currency))
+        if offer.qr is not None:
+            caption = f"PayNow QR · {money(cents, currency)} to {name_of(creditor)}"
+            await transport.send_image(debtor.wa_user_id, offer.qr, caption)
         buttons = [paid_button(creditor.id, currency), OWE_ALL]
         await transport.send_buttons(debtor.wa_user_id, f"{text}\n\n{offer.text}{end}", buttons)
-        if offer.qr is not None:
-            caption = f"PayNow · {money(cents, currency)} to {name_of(creditor)}"
-            await transport.send_image(debtor.wa_user_id, offer.qr, caption)
 
     # pay:done:<person>:<currency> from the debtor or pay:undo:<row> from the person paid
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:

@@ -41,7 +41,7 @@ def test_tokens_need_secret():
         ClaimTokens("").make("K7Q2AB", NOW)
 
 
-# the forwardable message numbers items and shows extra charges and both links
+# the forwardable message numbers items, shows extra charges and one link to claim in the chat
 def test_forward_text():
     bill = Bill(
         code="K7Q2AB", vendor="Jumbo", currency="SGD", total=11880, service=1000, tax=880,
@@ -51,12 +51,12 @@ def test_forward_text():
         BillItem(name="Chilli crab", qty=1, price_cents=8000),
         BillItem(name="Beer", qty=2, price_cents=2000)
     ]
-    text = forward_text(bill, items, "https://x/c/t", "https://wa.me/1?text=CLAIM%20K7Q2AB")
+    text = forward_text(bill, items, "https://wa.me/1?text=CLAIM%20K7Q2AB")
     assert text.startswith("*Jumbo · SGD 118.80*\n")
     assert "1. Chilli crab · SGD 80.00\n2. Beer x2 · SGD 20.00" in text
     assert "Service, tax and discounts: SGD 18.80" in text
-    assert "*Claim in WhatsApp*\nhttps://wa.me/1?text=CLAIM%20K7Q2AB" in text
-    assert text.endswith("*See the bill*\nhttps://x/c/t")
+    assert text.endswith("*Claim in WhatsApp*\nhttps://wa.me/1?text=CLAIM%20K7Q2AB")
+    assert "See the bill" not in text
 
 
 # friends pay the same and the payer covers the odd cents
@@ -64,7 +64,7 @@ def test_even_share():
     assert even_share(25669, 4) == (6417, 6418)
     assert even_share(1000, 4) == (250, 250)
     bill = Bill(code="K7Q2AB", vendor=None, currency="CHF", total=25669, even_ways=4)
-    text = even_text(bill, "https://x/c/t", "https://wa.me/1")
+    text = even_text(bill, "https://wa.me/1")
     assert text.startswith("*Bill · CHF 256.69*\nSplit evenly 4 ways: *CHF 64.17* each.")
 
 
