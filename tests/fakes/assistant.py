@@ -11,3 +11,7 @@ class FakeAssistant:
     # record the question
     async def answer(self, inbound: Inbound, transport: Transport) -> None:
         self.asked.append(inbound.text or "")
+
+    # record the undo as a question so routing tests can see it
+    async def undo_upcoming(self, inbound: Inbound, keys: str, transport: Transport) -> None:
+        self.asked.append(f"undo {keys}")

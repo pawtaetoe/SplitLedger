@@ -15,12 +15,15 @@ from splitledger.handlers.plan import PlanManager
 from splitledger.llm.client import MetaLLM
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, Locale, MessageResult
 from splitledger.llm.schemas_sg import SG
+from splitledger.plans.afford import CORE_RULES
+from splitledger.plans.afford_sg import SG_RULES
 from splitledger.plans.quota import QuotaBook
 from splitledger.settings import settings
 
 LOG = logging.getLogger(__name__)
 # add a region with a new schemas module and list it here
 LOCALES = {"global": GLOBAL, "sg": SG}
+AFFORD_RULES = {"global": CORE_RULES, "sg": [*CORE_RULES, *SG_RULES]}
 PROMPTS = Path(__file__).parents[1] / "llm" / "prompts"
 PROMPT = "".join(
     (PROMPTS / name).read_text(encoding="utf-8") for name in ("classify.md", "parse_expense.md")
@@ -33,10 +36,13 @@ QUESTION_WORDS = frozenset(
     {"how", "what", "when", "where", "which", "who", "why", "am", "is", "are", "did", "do",
      "does", "show", "list"}
 )
+# words that mark a bill they expect rather than one they paid
+REPEAT_WORDS = frozenset({"every", "monthly", "weekly", "yearly", "upcoming"})
 HELP = (
     "*What I can do*\n"
     "- Log: type _coffee 4.50_, or send a receipt photo or voice note\n"
     "- Ask: _how much did I spend this week?_\n"
+    "- Plan ahead: _rent 1200 every month on the 1st_\n"
     "- Budget: say _set up a plan_\n"
     "- Undo your last entry: send /undo"
 )
@@ -78,6 +84,8 @@ class MessageReader:
             return MessageResult(intent="split")
         if text.rstrip().endswith("?") or (words and words[0] in QUESTION_WORDS):
             return MessageResult(intent="ask")
+        if REPEAT_WORDS.intersection(words):
+            return MessageResult(intent="upcoming")
         draft = quick_parse(text, self._locale)
         if draft is not None:
             return MessageResult(intent="log", expense=draft)
@@ -120,10 +128,14 @@ class Router:
             return
         await transport.send_text(inbound.user_id, inbound.text or "")
 
-    # plan buttons go to plans, undo and receipt buttons to the logger, others echo
+    # plan buttons go to plans, upcoming undo to the assistant, undo and receipt to the logger
     async def _button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
         if button_id.startswith("plan:"):
             await self._plans.on_button(inbound, button_id, transport)
+            return
+        if button_id.startswith("upcoming:undo:"):
+            keys = button_id.removeprefix("upcoming:undo:")
+            await self._assistant.undo_upcoming(inbound, keys, transport)
             return
         if button_id.startswith("undo:"):
             await self._logger.undo(inbound, button_id.removeprefix("undo:"), transport)
@@ -167,7 +179,7 @@ class Router:
             draft = result.expense or ExpenseDraft(amount_cents=None)
             await self._logger.log(inbound, transport, draft, source)
             return
-        if result.intent == "ask":
+        if result.intent in ("ask", "upcoming"):
             await self._assistant.answer(inbound, transport)
             return
         if result.intent == "plan":
@@ -185,6 +197,6 @@ book = QuotaBook(SessionFactory)
 message_router = Router(
     ExpenseLogger(llm, SessionFactory, locale, book),
     MessageReader(llm, locale),
-    SpendAssistant(llm, SessionFactory, book),
+    SpendAssistant(llm, SessionFactory, book, AFFORD_RULES[settings.locale]),
     PlanManager(SessionFactory, book, locale, llm)
 )

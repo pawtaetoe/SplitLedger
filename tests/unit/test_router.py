@@ -77,6 +77,7 @@ PROTOCOL_ROWS = [
     (text("claim k7q2 1,3"), "claim"),
     (button("undo:abc"), "undo"),
     (button("receipt:k1"), "confirm_receipt"),
+    (button("upcoming:undo:abc"), "ask"),
     (button("save"), "echo"),
     (image(None), "log_receipt"),
     (audio(None), "echo")
@@ -96,6 +97,7 @@ MODEL_ROWS = [
     (text("makan 12 just now lah"), said("log", 1200), "log"),
     (text("I split my phone screen, repair 120"), said("log", 12000), "log"),
     (text("can I afford a 300 hotel?"), said("ask"), "ask"),
+    (text("mom's birthday present 150 on 3 dec"), said("upcoming"), "ask"),
     (text("let's share dinner four ways"), said("split"), "split"),
     (text("the laksa was mine"), said("claim"), "claim"),
     (text("hello"), said("chat"), "help"),
@@ -146,6 +148,7 @@ FALLBACK_ROWS = [
     (text("kopi 1.80"), "log"),
     (text("split this"), "split"),
     (text("how much did I spend?"), "ask"),
+    (text("rent 1200 every month"), "ask"),
     (text("hello"), "unclear")
 ]
 

@@ -1,10 +1,15 @@
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+from sqlalchemy import select
+
 from splitledger.contracts.llm import ToolRunResult
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, LedgerKind, User
-from splitledger.handlers.ask import CHECKING, NOTHING_YET, UNAVAILABLE, SpendAssistant, SpendTools
+from splitledger.handlers import ask
+from splitledger.handlers.ask import SpendAssistant, SpendTools
+from splitledger.plans.afford import CORE_RULES
 from splitledger.plans.quota import QuotaBook
 from tests.fakes import FakeLLM, FakeTransport
 
@@ -46,7 +51,7 @@ WEEK = {"start": "2026-10-25", "end": "2026-10-27"}
 # sums match the seeded rows and skip voided and other users
 async def test_sum_spend(sessions):
     me = await seed(sessions)
-    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions))
+    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)
     assert await tools.sum_spend(WEEK) == {"totals": [{"total": "SGD 65.70", "count": 3}]}
     dining = await tools.sum_spend({**WEEK, "category": "Dining"})
     assert dining == {"totals": [{"total": "SGD 51.50", "count": 2}]}
@@ -55,7 +60,7 @@ async def test_sum_spend(sessions):
 # a late night expense counts on its local day
 async def test_local_day_boundary(sessions):
     me = await seed(sessions)
-    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions))
+    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)
     day = await tools.list_expenses({"start": "2026-10-27", "end": "2026-10-27"})
     assert [row["what"] for row in day["expenses"]] == ["kopi"]
     next_day = await tools.list_expenses({"start": "2026-10-28", "end": "2026-10-28"})
@@ -65,7 +70,8 @@ async def test_local_day_boundary(sessions):
 # biggest first and capped at n
 async def test_top_expenses(sessions):
     me = await seed(sessions)
-    top = await SpendTools(sessions, me.id, SG, QuotaBook(sessions)).top_expenses({**WEEK, "n": 2})
+    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)
+    top = await tools.top_expenses({**WEEK, "n": 2})
     assert [row["amount"] for row in top["expenses"]] == ["SGD 45.00", "SGD 14.20"]
 
 
@@ -76,9 +82,9 @@ async def test_assistant_replies(sessions):
     llm.tool_result = ToolRunResult(text="You spent SGD 65.70 this week.")
     transport = FakeTransport()
     question = Inbound("m1", ME, "text", text="this week?")
-    await SpendAssistant(llm, sessions, QuotaBook(sessions)).answer(question, transport)
+    await SpendAssistant(llm, sessions, QuotaBook(sessions), CORE_RULES).answer(question, transport)
     replies = [reply for _, reply in transport.sent_text]
-    assert replies == [CHECKING, "You spent SGD 65.70 this week."]
+    assert replies == [ask.CHECKING, "You spent SGD 65.70 this week."]
 
 
 # a model failure gives a plain retry message
@@ -91,13 +97,59 @@ async def test_assistant_failure(sessions):
 
     transport = FakeTransport()
     question = Inbound("m1", ME, "text", text="?")
-    await SpendAssistant(BrokenLLM(), sessions, QuotaBook(sessions)).answer(question, transport)
-    assert transport.sent_text[-1] == (ME, UNAVAILABLE)
+    assistant = SpendAssistant(BrokenLLM(), sessions, QuotaBook(sessions), CORE_RULES)
+    await assistant.answer(question, transport)
+    assert transport.sent_text[-1] == (ME, ask.UNAVAILABLE)
 
 
 # someone who never logged anything gets a hint and no model call
 async def test_assistant_new_user(sessions):
     transport = FakeTransport()
-    assistant = SpendAssistant(FakeLLM(), sessions, QuotaBook(sessions))
+    assistant = SpendAssistant(FakeLLM(), sessions, QuotaBook(sessions), CORE_RULES)
     await assistant.answer(Inbound("m1", ME, "text", text="?"), transport)
-    assert transport.sent_text == [(ME, NOTHING_YET)]
+    assert transport.sent_text == [(ME, ask.NOTHING_YET)]
+
+
+
+# an affordability answer always ends with the caveat, and pay given in the question is kept
+async def test_afford_caveat_and_pay(sessions):
+    me = await seed(sessions)
+    llm = FakeLLM()
+    answer = "*No*, you'd need USD 15,000 a month."
+    llm.tool_result = ToolRunResult(text=answer, calls=["can_afford"])
+    transport = FakeTransport()
+    assistant = SpendAssistant(llm, sessions, QuotaBook(sessions), CORE_RULES)
+    await assistant.answer(Inbound("m1", ME, "text", text="can I afford a car?"), transport)
+    assert transport.sent_text[-1][1].endswith("\n\n" + ask.DISCLAIMER)
+    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)
+    result = await tools.can_afford(
+        {"kind": "car", "monthly_payment": 900, "running_costs": 600, "take_home": 4500}
+    )
+    assert result["answer"] == "no" and result["income_needed"] == "SGD 15000.00"
+    async with sessions() as session:
+        stored = (await session.execute(select(User.take_home_cents).where(User.id == me.id)))
+        assert stored.scalar_one() == 450000
+
+
+# plans are saved, listed with what is due, counted when affording and undone in one tap
+async def test_upcoming_round_trip(sessions):
+    me = await seed(sessions)
+    tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)
+    today = datetime.now(SG).date().isoformat()
+    rent = {"label": "rent", "amount": 1200, "every": "month", "on": today}
+    assert (await tools.add_upcoming(rent))["amount"] == "SGD 1200.00"
+    listed = await tools.list_upcoming({})
+    assert listed["upcoming"][0]["what"] == "rent"
+    assert listed["still_to_pay_this_month"] == "SGD 1200.00"
+    result = await tools.can_afford({"kind": "purchase", "price": 300, "take_home": 4500})
+    assert "Still to pay this month: SGD 1200.00 for rent." in result["facts"]
+    past = {"label": "gift", "amount": 50, "every": "once", "on": "2020-01-01"}
+    with pytest.raises(ValueError):
+        await tools.add_upcoming(past)
+    assert (await tools.remove_upcoming({"label": "gym"}))["upcoming"] == ["rent"]
+    transport = FakeTransport()
+    assistant = SpendAssistant(FakeLLM(), sessions, QuotaBook(sessions), CORE_RULES)
+    keys = ",".join(str(key) for key in tools.added)
+    await assistant.undo_upcoming(Inbound("m2", ME, "button"), keys, transport)
+    assert transport.sent_text[-1][1] == ask.UNDONE.format("rent")
+    assert (await tools.list_upcoming({}))["upcoming"] == []

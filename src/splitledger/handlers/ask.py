@@ -7,16 +7,19 @@ from pathlib import Path
 from typing import Any, get_args
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.contracts.llm import LLM, Tool
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
-from splitledger.db.models import LedgerEntry, LedgerKind, User
+from splitledger.db.models import LedgerEntry, LedgerKind, PlannedSpend, User
 from splitledger.handlers.log import money
 from splitledger.llm.schemas import Category
+from splitledger.plans import afford
+from splitledger.plans.afford import Ask, Means, Rule, Spending, assess, to_cents
 from splitledger.plans.quota import QuotaBook
+from splitledger.plans.upcoming import EVERY, due_days, outlook
 
 LOG = logging.getLogger(__name__)
 PROMPT = (Path(__file__).parents[1] / "llm" / "prompts" / "assistant.md").read_text(
@@ -31,10 +34,47 @@ LIST_LIMIT = 20
 CHECKING = "Checking your spending…"
 NOTHING_YET = "You haven't logged anything yet. Try something like coffee 4.50 first"
 UNAVAILABLE = "I couldn't work that out just now. Please try again in a minute"
+DISCLAIMER = "_A rule of thumb, not financial advice._"
+UNDONE = "Removed *{}* from your upcoming bills."
+ALREADY = "That was already removed."
+# days ahead to look for the next time a plan is due
+NEXT_DAYS = 400
 DAYS = {"type": "string", "description": "local calendar day as YYYY-MM-DD"}
 RANGE = {"start": DAYS, "end": {**DAYS, "description": "last local day, inclusive"}}
 CATEGORY = {"type": "string", "enum": CATEGORIES}
 Query = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+AMOUNT = {"type": "number", "description": "plain amount in their currency, not cents"}
+AFFORD = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": list(afford.KINDS)},
+        "price": AMOUNT,
+        "down_payment": AMOUNT,
+        "down_payment_pct": {"type": "number", "description": "down payment as a percent"},
+        "monthly_payment": AMOUNT,
+        "running_costs": {**AMOUNT, "description": "monthly insurance, fuel, parking"},
+        "term_months": {"type": "integer"},
+        "other_monthly_debt": AMOUNT,
+        "property_type": {"type": "string", "enum": list(afford.PROPERTY_TYPES)},
+        "omv": {**AMOUNT, "description": "Singapore open market value of a car"},
+        "category": CATEGORY,
+        "take_home": {**AMOUNT, "description": "monthly take home pay, only if they said it"},
+        "gross_income": {**AMOUNT, "description": "monthly pay before tax, only if they said it"}
+    },
+    "required": ["kind"]
+}
+UPCOMING = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "description": "short name like rent or mom's present"},
+        "amount": AMOUNT,
+        "every": {"type": "string", "enum": list(EVERY)},
+        "on": {**DAYS, "description": "the next local day it is due"},
+        "category": CATEGORY
+    },
+    "required": ["label", "amount", "every", "on"]
+}
+LABEL = {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
 
 
 # utc start and exclusive end for local days from start to end, error on bad input
@@ -58,6 +98,20 @@ def category_arg(args: dict[str, Any]) -> str | None:
     return str(category)
 
 
+# the first day of the month n months before the given first of a month
+def months_back(first: date, n: int) -> date:
+    index = first.year * 12 + first.month - 1 - n
+    return date(index // 12, index % 12 + 1, 1)
+
+
+# full months of history before this month, at most three, from the first expense day
+def full_months(first_spend: date | None, month_start: date) -> int:
+    if first_spend is None:
+        return 0
+    gap = (month_start.year * 12 + month_start.month) - (first_spend.year * 12 + first_spend.month)
+    return max(0, min(3, gap - (0 if first_spend.day == 1 else 1)))
+
+
 # bad arguments go back to the model as an error it can fix
 def guarded(query: Query) -> Query:
     async def run(args: dict[str, Any]) -> dict[str, Any]:
@@ -73,12 +127,15 @@ class SpendTools:
     # every query is scoped to this user and read in their timezone
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], user_id: uuid.UUID, zone: ZoneInfo,
-        book: QuotaBook
+        book: QuotaBook, rules: list[Rule]
     ) -> None:
         self._sessions = sessions
         self._user_id = user_id
         self._zone = zone
         self._book = book
+        self._rules = rules
+        # plans saved during this answer, so one tap can undo them
+        self.added: list[uuid.UUID] = []
 
     # the tools with their argument schemas
     def tools(self) -> list[Tool]:
@@ -98,7 +155,15 @@ class SpendTools:
             Tool("who_owes_me", "money friends still owe from shared bills",
                  guarded(self.who_owes_me)),
             Tool("plan_status", "budget plan buckets with quota, spent and left this period",
-                 guarded(self.plan_status))
+                 guarded(self.plan_status)),
+            Tool("can_afford", "check a purchase, car or home against named affordability rules",
+                 guarded(self.can_afford), AFFORD),
+            Tool("add_upcoming", "save a bill or purchase they expect, once or on repeat",
+                 guarded(self.add_upcoming), UPCOMING),
+            Tool("list_upcoming", "bills and purchases they expect, with what is due this month",
+                 guarded(self.list_upcoming)),
+            Tool("remove_upcoming", "stop expecting a bill or purchase, by its name",
+                 guarded(self.remove_upcoming), LABEL)
         ]
 
     # total per currency
@@ -148,6 +213,164 @@ class SpendTools:
     async def plan_status(self, args: dict[str, Any]) -> dict[str, Any]:
         return await self._book.status(self._user_id)
 
+    # rules check the numbers, pay they mention is remembered for next time
+    async def can_afford(self, args: dict[str, Any]) -> dict[str, Any]:
+        ask = Ask.from_args(args)
+        take_home = to_cents(args.get("take_home"))
+        gross = to_cents(args.get("gross_income"))
+        async with self._sessions() as session:
+            user = await session.get(User, self._user_id)
+            if user is None:
+                return {"error": "unknown user"}
+            if take_home or gross:
+                values = {"take_home_cents": take_home} if take_home else {}
+                values |= {"gross_income_cents": gross} if gross else {}
+                await session.execute(update(User).where(User.id == user.id).values(**values))
+                await session.commit()
+            currency = user.currency
+        today = datetime.now(self._zone).date()
+        means = Means(
+            currency, take_home or user.take_home_cents,
+            gross or user.gross_income_cents, await self._book.report(self._user_id),
+            await self._spending(ask.category, currency) if ask.kind == "purchase" else None,
+            outlook(await self._planned(currency), today)
+        )
+        return assess(ask, means, self._rules)
+
+    # save a bill or purchase they expect, a one off can't be in the past
+    async def add_upcoming(self, args: dict[str, Any]) -> dict[str, Any]:
+        every = str(args.get("every", ""))
+        if every not in EVERY:
+            raise ValueError(f"every must be one of {', '.join(EVERY)}")
+        label = str(args.get("label", "")).strip()
+        amount = to_cents(args.get("amount"))
+        if not label or not amount:
+            raise ValueError("label and an amount above 0 are needed")
+        on = date.fromisoformat(str(args.get("on", "")))
+        if every == "once" and on < datetime.now(self._zone).date():
+            raise ValueError("a one off must be due today or later")
+        async with self._sessions() as session:
+            user = await session.get(User, self._user_id)
+            if user is None:
+                return {"error": "unknown user"}
+            plan = PlannedSpend(
+                id=uuid.uuid4(), user_id=user.id, label=label, amount_cents=amount,
+                currency=user.currency, category=category_arg(args), every=every, due_on=on
+            )
+            session.add(plan)
+            await session.commit()
+        self.added.append(plan.id)
+        saved = money(amount, plan.currency)
+        return {"saved": label, "amount": saved, "every": every, "on": on.isoformat()}
+
+    # every active plan with its next day, plus totals for this month and a usual month
+    async def list_upcoming(self, args: dict[str, Any]) -> dict[str, Any]:
+        currency = await self._currency()
+        today = datetime.now(self._zone).date()
+        plans = await self._planned(currency)
+        ahead = outlook(plans, today)
+        items = []
+        for plan in plans:
+            days = due_days(plan.every, plan.due_on, today, today + timedelta(days=NEXT_DAYS))
+            if days:
+                items.append({
+                    "what": plan.label, "amount": money(plan.amount_cents, currency),
+                    "every": plan.every, "next": days[0].isoformat()
+                })
+        return {
+            "upcoming": sorted(items, key=lambda item: item["next"]),
+            "still_to_pay_this_month": money(ahead.due_total(), currency),
+            "repeating_per_month": money(ahead.monthly, currency)
+        }
+
+    # void every active plan whose name matches, never delete
+    async def remove_upcoming(self, args: dict[str, Any]) -> dict[str, Any]:
+        label = str(args.get("label", "")).strip()
+        if not label:
+            raise ValueError("label is required")
+        query = (
+            update(PlannedSpend)
+            .where(
+                PlannedSpend.user_id == self._user_id,
+                PlannedSpend.voided_at.is_(None),
+                PlannedSpend.label.ilike(f"%{label}%")
+            )
+            .values(voided_at=func.now())
+            .returning(PlannedSpend.label)
+        )
+        async with self._sessions() as session:
+            removed = list((await session.execute(query)).scalars())
+            await session.commit()
+        if not removed:
+            names = [plan.label for plan in await self._planned(await self._currency())]
+            return {"error": f"no upcoming bill matches {label}", "upcoming": names}
+        return {"removed": removed}
+
+    # the user's main currency
+    async def _currency(self) -> str:
+        async with self._sessions() as session:
+            user = await session.get(User, self._user_id)
+        if user is None:
+            raise ValueError("unknown user")
+        return user.currency
+
+    # active plans in one currency
+    async def _planned(self, currency: str) -> list[PlannedSpend]:
+        query = select(PlannedSpend).where(
+            PlannedSpend.user_id == self._user_id,
+            PlannedSpend.voided_at.is_(None),
+            PlannedSpend.currency == currency
+        )
+        async with self._sessions() as session:
+            return list((await session.execute(query)).scalars())
+
+    # this month so far and a usual month from up to three full months of history
+    async def _spending(self, category: str | None, currency: str) -> Spending:
+        month_start = datetime.now(self._zone).date().replace(day=1)
+        async with self._sessions() as session:
+            first = (await session.execute(
+                select(func.min(LedgerEntry.occurred_at)).where(*self._mine(currency))
+            )).scalar_one_or_none()
+        first_day = first.astimezone(self._zone).date() if first else None
+        months = full_months(first_day, month_start)
+        average_from = months_back(month_start, months)
+        this_month = await self._total(currency, month_start, None)
+        category_month = await self._total(currency, month_start, None, category) if category else 0
+        window = await self._total(currency, average_from, month_start) if months else 0
+        category_window = (
+            await self._total(currency, average_from, month_start, category)
+            if months and category else 0
+        )
+        return Spending(
+            this_month, category_month, window // months if months else 0,
+            category_window // months if months else 0, months
+        )
+
+    # expenses of this user in one currency that still count
+    def _mine(self, currency: str) -> list[Any]:
+        return [
+            LedgerEntry.user_id == self._user_id,
+            LedgerEntry.kind == LedgerKind.EXPENSE,
+            LedgerEntry.voided_at.is_(None),
+            LedgerEntry.currency == currency
+        ]
+
+    # total spent from one local day to before another, optionally one category
+    async def _total(
+        self, currency: str, start: date, end: date | None, category: str | None = None
+    ) -> int:
+        filters = [
+            *self._mine(currency),
+            LedgerEntry.occurred_at >= datetime.combine(start, time(), self._zone)
+        ]
+        if end is not None:
+            filters.append(LedgerEntry.occurred_at < datetime.combine(end, time(), self._zone))
+        if category is not None:
+            filters.append(LedgerEntry.category == category)
+        query = select(func.coalesce(func.sum(LedgerEntry.amount_cents), 0)).where(*filters)
+        async with self._sessions() as session:
+            return int((await session.execute(query)).scalar_one())
+
     # expense filters for this user, the range and an optional category
     def _filters(self, args: dict[str, Any]) -> list[Any]:
         first, after = day_range(args, self._zone)
@@ -186,13 +409,15 @@ class SpendTools:
 
 # answers spending questions with the model calling read only tools
 class SpendAssistant:
-    # model for the tool loop, sessions for the queries and the quota book for plans
+    # model for the tool loop, sessions, the quota book and the affordability rules in use
     def __init__(
-        self, llm: LLM, sessions: async_sessionmaker[AsyncSession], book: QuotaBook
+        self, llm: LLM, sessions: async_sessionmaker[AsyncSession], book: QuotaBook,
+        rules: list[Rule]
     ) -> None:
         self._llm = llm
         self._sessions = sessions
         self._book = book
+        self._rules = rules
 
     # say we are checking, run the tool loop, reply with its answer or a fallback
     async def answer(self, inbound: Inbound, transport: Transport) -> None:
@@ -210,13 +435,44 @@ class SpendAssistant:
             .replace("{timezone}", user.timezone)
             .replace("{currency}", user.currency)
         )
-        tools = SpendTools(self._sessions, user.id, zone, self._book).tools()
+        spend = SpendTools(self._sessions, user.id, zone, self._book, self._rules)
         try:
             result = await asyncio.wait_for(
-                self._llm.run_tools(system, inbound.text or "", tools), ANSWER_TIMEOUT
+                self._llm.run_tools(system, inbound.text or "", spend.tools()), ANSWER_TIMEOUT
             )
         except Exception as error:
             LOG.warning("spend assistant failed with %s", type(error).__name__)
             await transport.send_text(inbound.user_id, UNAVAILABLE)
             return
-        await transport.send_text(inbound.user_id, result.text.strip() or UNAVAILABLE)
+        reply = result.text.strip() or UNAVAILABLE
+        # every affordability answer carries the same caveat, whatever the model wrote
+        if "can_afford" in result.calls and DISCLAIMER not in reply:
+            reply = f"{reply}\n\n{DISCLAIMER}"
+        if spend.added:
+            undo = "upcoming:undo:" + ",".join(str(key) for key in spend.added)
+            await transport.send_buttons(inbound.user_id, reply, [(undo, "Undo")])
+            return
+        await transport.send_text(inbound.user_id, reply)
+
+    # void plans saved by the last answer, only the user's own
+    async def undo_upcoming(self, inbound: Inbound, keys: str, transport: Transport) -> None:
+        try:
+            ids = [uuid.UUID(key) for key in keys.split(",")]
+        except ValueError:
+            ids = []
+        owner = select(User.id).where(User.wa_user_id == inbound.user_id).scalar_subquery()
+        query = (
+            update(PlannedSpend)
+            .where(
+                PlannedSpend.id.in_(ids),
+                PlannedSpend.user_id == owner,
+                PlannedSpend.voided_at.is_(None)
+            )
+            .values(voided_at=func.now())
+            .returning(PlannedSpend.label)
+        )
+        async with self._sessions() as session:
+            removed = list((await session.execute(query)).scalars())
+            await session.commit()
+        text = UNDONE.format(", ".join(removed)) if removed else ALREADY
+        await transport.send_text(inbound.user_id, text)

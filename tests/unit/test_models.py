@@ -11,6 +11,7 @@ def test_expected_tables_exist():
         "processed_messages",
         "budgets",
         "budget_plans",
+        "planned_spends",
         "bills",
         "bill_items",
         "participants",

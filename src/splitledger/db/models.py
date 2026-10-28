@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
@@ -60,6 +60,26 @@ class User(Base):
     pay_methods: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict)
     take_home_cents: Mapped[int | None] = mapped_column(sa.BigInteger)
     gross_income_cents: Mapped[int | None] = mapped_column(sa.BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
+
+
+# a bill or purchase the user expects, once or on repeat, never deleted
+class PlannedSpend(Base):
+    __tablename__ = "planned_spends"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
+    label: Mapped[str] = mapped_column(sa.String)
+    amount_cents: Mapped[int] = mapped_column(sa.BigInteger)
+    currency: Mapped[str] = mapped_column(sa.String)
+    category: Mapped[str | None] = mapped_column(sa.String)
+    # once, week, month or year
+    every: Mapped[str] = mapped_column(sa.String)
+    # the day for a one off, the first due day for a repeat
+    due_on: Mapped[date] = mapped_column(sa.Date)
+    voided_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()
     )

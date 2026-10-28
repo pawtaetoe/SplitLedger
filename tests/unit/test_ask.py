@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from splitledger.handlers import ask
 from splitledger.handlers.ask import SpendTools, category_arg, day_range, guarded
 
 SG = ZoneInfo("Asia/Singapore")
@@ -48,11 +49,21 @@ async def test_guarded_returns_error():
 
 # every tool names its arguments so the model knows what to send
 def test_tools_have_schemas():
-    tools = SpendTools(None, None, SG, None).tools()
+    tools = SpendTools(None, None, SG, None, []).tools()
     assert [tool.name for tool in tools] == [
-        "sum_spend", "top_expenses", "list_expenses", "who_owes_me", "plan_status"
+        "sum_spend", "top_expenses", "list_expenses", "who_owes_me", "plan_status",
+        "can_afford", "add_upcoming", "list_upcoming", "remove_upcoming"
     ]
     for tool in tools[:3]:
         assert tool.parameters["required"] == ["start", "end"]
     assert "category" in tools[0].parameters["properties"]
     assert "n" in tools[1].parameters["properties"]
+
+
+# months count back across years and only full months of history count
+def test_month_helpers():
+    assert ask.months_back(date(2026, 2, 1), 3) == date(2025, 11, 1)
+    assert ask.full_months(None, date(2026, 11, 1)) == 0
+    assert ask.full_months(date(2026, 10, 15), date(2026, 11, 1)) == 0
+    assert ask.full_months(date(2026, 10, 1), date(2026, 11, 1)) == 1
+    assert ask.full_months(date(2026, 1, 9), date(2026, 11, 1)) == 3
