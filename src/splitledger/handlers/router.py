@@ -36,6 +36,9 @@ class Router:
         if inbound.kind == "button":
             await transport.send_text(inbound.user_id, button_id)
             return
+        if inbound.kind == "audio" and inbound.media_ref:
+            await self._logger.log_voice(inbound, transport)
+            return
         if inbound.kind == "audio":
             await transport.send_text(inbound.user_id, "[audio]")
             return

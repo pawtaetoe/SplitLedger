@@ -12,6 +12,7 @@ class FakeLLM:
     def __init__(self, canned: dict[str, object] | None = None) -> None:
         self.canned: dict[str, object] = canned or {}
         self.transcript: str = ""
+        self.transcribed: int = 0
         self.structured_calls: list[str] = []
         self.tool_result: ToolRunResult = ToolRunResult(text="")
 
@@ -33,4 +34,5 @@ class FakeLLM:
 
     # return the canned transcript
     async def transcribe(self, audio: bytes, mime: str) -> str:
+        self.transcribed += 1
         return self.transcript

@@ -22,6 +22,10 @@ class FakeLogger:
         image = await transport.fetch_media(inbound.media_ref or "")
         await transport.send_image(inbound.user_id, image, caption=inbound.text)
 
+    # mark the voice note as heard
+    async def log_voice(self, inbound: Inbound, transport: Transport) -> None:
+        await transport.send_text(inbound.user_id, "[audio]")
+
     # record the confirmed receipt key
     async def confirm_receipt(self, inbound: Inbound, key: str, transport: Transport) -> None:
         self.confirmed.append(key)

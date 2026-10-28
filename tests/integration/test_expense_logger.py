@@ -140,6 +140,21 @@ async def test_receipt_saved_once(sessions):
     assert transport.sent_text == [("6581234567", "You already logged this receipt")]
 
 
+# a voice note echoes the transcript and logs a voice expense
+async def test_voice_note_logged(sessions):
+    transport = FakeTransport()
+    transport.media["note-1"] = b"OggS" + bytes(2) + (3 * 48000).to_bytes(8, "little")
+    llm = FakeLLM()
+    llm.transcript = "Just spent 45 on petrol at Shell"
+    logger = ExpenseLogger(llm, sessions, GLOBAL)
+    await logger.log_voice(Inbound("m1", "6581234567", "audio", media_ref="note-1"), transport)
+    assert transport.sent_text == [("6581234567", "Heard: Just spent 45 on petrol at Shell")]
+    assert transport.sent_buttons[0][1].startswith("Logged USD 45.00 · Transport")
+    async with sessions() as session:
+        rows = (await session.execute(select(LedgerEntry.amount_cents, LedgerEntry.source))).all()
+    assert [(amount, source.value) for amount, source in rows] == [(4500, "VOICE")]
+
+
 # a confirmed mismatch is saved at the printed total
 async def test_confirmed_receipt_saved(sessions):
     receipt = ReceiptDraft(total_cents=1500, subtotal_cents=900, category="Dining")

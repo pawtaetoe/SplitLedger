@@ -1,6 +1,7 @@
 import hashlib
 import re
 import uuid
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -19,6 +20,8 @@ PROMPT = (PROMPTS / "parse_expense.md").read_text(encoding="utf-8")
 RECEIPT_PROMPT = f"parse_receipt: {(PROMPTS / 'parse_receipt.md').read_text(encoding='utf-8')}"
 # cents a printed total may be off by before we ask
 TOLERANCE = 5
+MAX_VOICE_SECONDS = 60
+MAX_VOICE_BYTES = 1_000_000
 # optional currency symbol then an amount with up to two decimals
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 
@@ -57,6 +60,20 @@ def receipt_adds_up(receipt: ReceiptDraft) -> bool:
     return abs(base + charges - receipt.total_cents) <= TOLERANCE
 
 
+# seconds an ogg opus clip plays, from the last page granule position at 48khz
+def ogg_seconds(audio: bytes) -> float | None:
+    last = audio.rfind(b"OggS")
+    if last < 0 or len(audio) < last + 14:
+        return None
+    return int.from_bytes(audio[last + 6 : last + 14], "little", signed=True) / 48000
+
+
+# too long by ogg length or by size, other formats only get the size cap until a decoder is allowed
+def voice_too_long(audio: bytes) -> bool:
+    seconds = ogg_seconds(audio)
+    return len(audio) > MAX_VOICE_BYTES or (seconds is not None and seconds > MAX_VOICE_SECONDS)
+
+
 # money for a reply line, the code reads clearly in any country
 def money(cents: int, currency: str) -> str:
     return f"{currency} {cents // 100}.{cents % 100:02d}"
@@ -82,7 +99,9 @@ class ExpenseLogger:
         return await self._llm.structured(f"parse_expense: {PROMPT}{text}", ExpenseDraft)
 
     # save one expense and offer undo
-    async def log(self, inbound: Inbound, transport: Transport) -> None:
+    async def log(
+        self, inbound: Inbound, transport: Transport, source: LedgerSource = LedgerSource.TEXT
+    ) -> None:
         draft = await self.parse(inbound.text or "")
         # the model can return zero or negative amounts so treat them as missing
         if draft.amount_cents is None or draft.amount_cents <= 0:
@@ -90,7 +109,26 @@ class ExpenseLogger:
                 inbound.user_id, "How much was it? Try something like coffee 6.50"
             )
             return
-        await self._save(inbound, transport, draft, draft.amount_cents, LedgerSource.TEXT)
+        await self._save(inbound, transport, draft, draft.amount_cents, source)
+
+    # transcribe a voice note, echo what was heard, then log it like text
+    async def log_voice(self, inbound: Inbound, transport: Transport) -> None:
+        audio = await transport.fetch_media(inbound.media_ref or "")
+        if voice_too_long(audio):
+            await transport.send_text(
+                inbound.user_id,
+                f"That voice note is over {MAX_VOICE_SECONDS} seconds. Try a shorter one"
+            )
+            return
+        # whatsapp voice notes are ogg opus
+        heard = (await self._llm.transcribe(audio, "audio/ogg")).strip()
+        if not heard:
+            await transport.send_text(
+                inbound.user_id, "I couldn't hear that. Try again or type it"
+            )
+            return
+        await transport.send_text(inbound.user_id, f"Heard: {heard}")
+        await self.log(replace(inbound, kind="text", text=heard), transport, LedgerSource.VOICE)
 
     # read a receipt photo, save it when it adds up, else ask to confirm the total
     async def log_receipt(self, inbound: Inbound, transport: Transport) -> None:
