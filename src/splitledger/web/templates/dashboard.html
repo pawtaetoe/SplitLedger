@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your money · SplitLedger</title>
+{% include "_style.html" %}
+</head>
+<body>
+{% set user = board.user %}
+{% set c = user.currency %}
+{% set owed_total = board.owed_to_me|selectattr("currency", "equalto", c)|sum(attribute="cents") %}
+{% set owe_total = board.i_owe|selectattr("currency", "equalto", c)|sum(attribute="cents") %}
+<main>
+  <header>
+    <h1>{% if user.display_name %}{{ user.display_name }}'s money{% else %}Your money{% endif %}</h1>
+    <p class="sub">Everything from your chats with the bot, in one place.</p>
+    <div class="summary">
+      <div><span>Owed to you</span><strong>{{ money(owed_total, c) }}</strong></div>
+      <div><span>You owe</span><strong>{{ money(owe_total, c) }}</strong></div>
+      <div><span>This month</span><strong>{{ money(board.month_total(), c) }}</strong></div>
+    </div>
+  </header>
+
+  <section aria-labelledby="owed">
+    <h2 id="owed">Owed to you</h2>
+    {% if board.owed_to_me %}
+    <ul>{% for b in board.owed_to_me %}<li class="row"><span>{{ b.who }}</span><strong>{{ money(b.cents, b.currency) }}</strong></li>{% endfor %}</ul>
+    {% else %}<p class="note">Nobody owes you anything right now.</p>{% endif %}
+  </section>
+
+  <section aria-labelledby="owe">
+    <h2 id="owe">You owe</h2>
+    {% if board.i_owe %}
+    <ul>{% for b in board.i_owe %}<li class="row"><span>{{ b.who }}</span><strong>{{ money(b.cents, b.currency) }}</strong></li>{% endfor %}</ul>
+    {% else %}<p class="note">You don't owe anyone.</p>{% endif %}
+  </section>
+
+  {% macro bills(rows, empty) %}
+  {% if rows %}
+  <ul>
+    {% for row in rows %}
+    {% set bill = row.bill %}
+    <li>
+      <div class="row"><span>{{ bill.vendor or "Bill" }} · {{ bill.code }}</span><strong>{{ money(bill.total, bill.currency) }}</strong></div>
+      <p class="who">{% if bill.even_ways %}Split evenly · {{ row.people }} of {{ bill.even_ways }} joined{% else %}{{ row.claimed }} of {{ row.items }} items claimed · {{ row.people }} people{% endif %}</p>
+      <a class="button" href="{{ links[bill.code] }}">Open the bill</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="note">{{ empty }}</p>{% endif %}
+  {% endmacro %}
+
+  <section aria-labelledby="paid">
+    <h2 id="paid">Open bills you paid</h2>
+    {{ bills(board.paid, "None open. Send a receipt photo with the caption split to start one.") }}
+  </section>
+
+  {% if board.joined %}
+  <section aria-labelledby="joined">
+    <h2 id="joined">Bills you're in</h2>
+    {{ bills(board.joined, "") }}
+  </section>
+  {% endif %}
+
+  <section aria-labelledby="month">
+    <h2 id="month">This month</h2>
+    {% if board.month %}
+    <ul>{% for category, cents in board.month %}<li class="row"><span>{{ category }}</span><strong>{{ money(cents, c) }}</strong></li>{% endfor %}</ul>
+    {% else %}<p class="note">Nothing logged this month yet. Type something like coffee 4.50 in the chat.</p>{% endif %}
+    {% if board.report %}
+    <h3>Your plan</h3>
+    <ul>
+      {% for b in board.report.buckets %}
+      <li>
+        <div class="row"><span>{{ b.name }}</span><strong>{% if b.saving %}save {{ money(b.quota_cents, c) }}{% elif b.left_cents() < 0 %}{{ money(-b.left_cents(), c) }} over{% else %}{{ money(b.left_cents(), c) }} left{% endif %}</strong></div>
+        {% if not b.saving %}
+        <div class="bar" role="img" aria-label="{{ b.used_pct() }} percent used"><span style="width: {{ [b.used_pct(), 100]|min }}%"{% if b.used_pct() >= 100 %} class="over"{% endif %}></span></div>
+        <p class="who">{{ money(b.spent_cents, c) }} of {{ money(b.quota_cents, c) }} this {{ board.report.unit() }}</p>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
+  <section aria-labelledby="coming">
+    <h2 id="coming">Coming up</h2>
+    {% if board.coming %}
+    <ul>
+      {% for item in board.coming %}
+      <li>
+        <div class="row"><span>{{ item.plan.label }}</span><strong>{{ money(item.plan.amount_cents, item.plan.currency) }}</strong></div>
+        <p class="who">{{ "once" if item.plan.every == "once" else "every " ~ item.plan.every }} · next {{ item.next_on.day }} {{ item.next_on.strftime("%b") }}{% if item.plan.remind %} · reminder on{% endif %}</p>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="note">Still to pay this month: <strong>{{ money(board.still_due, c) }}</strong></p>
+    {% else %}<p class="note">No upcoming bills. Tell the bot one, like rent 1800 every month on the 1st.</p>{% endif %}
+  </section>
+
+  <section aria-labelledby="recent">
+    <h2 id="recent">Recent spending</h2>
+    {% if board.recent %}
+    <ul>
+      {% for e in board.recent %}
+      <li>
+        <div class="row"><span>{{ e.vendor or e.note or e.category }}</span><strong>{{ money(e.amount_cents, e.currency) }}</strong></div>
+        <p class="who">{{ e.category }} · {{ e.occurred_at.astimezone(tz).day }} {{ e.occurred_at.astimezone(tz).strftime("%b") }}</p>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="note">Nothing yet.</p>{% endif %}
+  </section>
+</main>
+</body>
+</html>

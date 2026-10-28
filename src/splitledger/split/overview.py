@@ -1,0 +1,168 @@
+import uuid
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from splitledger.db import models
+from splitledger.db.models import Bill, BillItem, BillStatus, LedgerEntry, LedgerKind, User
+from splitledger.plans.quota import PlanReport, QuotaBook
+from splitledger.plans.upcoming import open_days, outlook
+
+# how far the dashboard looks for the next day a bill is due
+NEXT_DAYS = 400
+RECENT = 10
+OPEN_BILLS = 10
+
+
+# money one person owes or is owed, in one currency
+@dataclass(frozen=True)
+class Balance:
+    who: str
+    cents: int
+    currency: str
+
+
+# an open shared bill and how far claiming has got
+@dataclass(frozen=True)
+class OpenBill:
+    bill: Bill
+    claimed: int
+    items: int
+    people: int
+
+
+# one upcoming bill with its next day
+@dataclass(frozen=True)
+class Coming:
+    plan: models.PlannedSpend
+    next_on: date
+
+
+# everything the dashboard shows for one user
+@dataclass(frozen=True)
+class Dashboard:
+    user: User
+    owed_to_me: list[Balance]
+    i_owe: list[Balance]
+    paid: list[OpenBill]
+    joined: list[OpenBill]
+    month: list[tuple[str, int]]
+    report: PlanReport | None
+    coming: list[Coming]
+    still_due: int
+    recent: list[LedgerEntry]
+
+    # this month's spending in the main currency
+    def month_total(self) -> int:
+        return sum(cents for _, cents in self.month)
+
+
+# reads one user's money across expenses, bills, plans and upcoming bills
+class Overview:
+    # sessions and the quota book for plan parts
+    def __init__(self, sessions: async_sessionmaker[AsyncSession], book: QuotaBook) -> None:
+        self._sessions = sessions
+        self._book = book
+
+    # the whole dashboard, none for an unknown user
+    async def build(self, user_id: uuid.UUID) -> Dashboard | None:
+        async with self._sessions() as session:
+            user = await session.get(User, user_id)
+            if user is None:
+                return None
+            zone = ZoneInfo(user.timezone)
+            today = datetime.now(zone).date()
+            owed = await self._balances(session, user_id, LedgerKind.RECEIVABLE)
+            owe = await self._balances(session, user_id, LedgerKind.PAYABLE)
+            paid = await self._open_bills(session, Bill.payer_id == user_id)
+            mine = select(models.Participant.bill_id).where(models.Participant.user_id == user_id)
+            joined = await self._open_bills(session, Bill.payer_id != user_id, Bill.id.in_(mine))
+            month = await self._month(session, user_id, user.currency, today, zone)
+            plans = list((await session.execute(
+                select(models.PlannedSpend).where(
+                    models.PlannedSpend.user_id == user_id, models.PlannedSpend.voided_at.is_(None)
+                )
+            )).scalars())
+            recent = list((await session.execute(
+                select(LedgerEntry)
+                .where(
+                    LedgerEntry.user_id == user_id, LedgerEntry.kind == LedgerKind.EXPENSE,
+                    LedgerEntry.voided_at.is_(None)
+                )
+                .order_by(LedgerEntry.occurred_at.desc())
+                .limit(RECENT)
+            )).scalars())
+        coming: list[Coming] = []
+        for plan in plans:
+            days = open_days(plan, today, today + timedelta(days=NEXT_DAYS))
+            if days:
+                coming.append(Coming(plan, days[0]))
+        coming.sort(key=lambda item: item.next_on)
+        due = outlook([p for p in plans if p.currency == user.currency], today).due_total()
+        report = await self._book.report(user_id)
+        return Dashboard(user, owed, owe, paid, joined, month, report, coming, due, recent)
+
+    # owed or owing totals by the other person, guests named from the row note
+    async def _balances(
+        self, session: AsyncSession, user_id: uuid.UUID, kind: LedgerKind
+    ) -> list[Balance]:
+        who = func.coalesce(User.display_name, LedgerEntry.note, "a friend")
+        query = (
+            select(who, LedgerEntry.currency, func.sum(LedgerEntry.amount_cents))
+            .join(User, LedgerEntry.counterparty_id == User.id, isouter=True)
+            .where(
+                LedgerEntry.user_id == user_id, LedgerEntry.kind == kind,
+                LedgerEntry.voided_at.is_(None)
+            )
+            .group_by(who, LedgerEntry.currency)
+            .order_by(func.sum(LedgerEntry.amount_cents).desc())
+        )
+        rows = (await session.execute(query)).all()
+        return [Balance(str(name), int(cents), currency) for name, currency, cents in rows]
+
+    # open bills matching the filters, newest first, with claim progress
+    async def _open_bills(self, session: AsyncSession, *where: Any) -> list[OpenBill]:
+        bills = list((await session.execute(
+            select(Bill)
+            .where(Bill.status == BillStatus.OPEN, *where)
+            .order_by(Bill.created_at.desc())
+            .limit(OPEN_BILLS)
+        )).scalars())
+        found: list[OpenBill] = []
+        for bill in bills:
+            items = select(BillItem.id).where(BillItem.bill_id == bill.id)
+            claimed = (await session.execute(
+                select(func.count(func.distinct(models.ItemClaim.bill_item_id)))
+                .where(models.ItemClaim.bill_item_id.in_(items))
+            )).scalar_one()
+            count = (await session.execute(select(func.count()).select_from(
+                items.subquery()
+            ))).scalar_one()
+            people = (await session.execute(
+                select(func.count()).where(models.Participant.bill_id == bill.id)
+            )).scalar_one()
+            found.append(OpenBill(bill, int(claimed), int(count), int(people)))
+        return found
+
+    # this month's spending by category in the main currency, biggest first
+    async def _month(
+        self, session: AsyncSession, user_id: uuid.UUID, currency: str, today: date,
+        zone: ZoneInfo
+    ) -> list[tuple[str, int]]:
+        start = datetime.combine(today.replace(day=1), time(), zone)
+        total = func.sum(LedgerEntry.amount_cents)
+        rows = (await session.execute(
+            select(LedgerEntry.category, total)
+            .where(
+                LedgerEntry.user_id == user_id, LedgerEntry.kind == LedgerKind.EXPENSE,
+                LedgerEntry.voided_at.is_(None), LedgerEntry.currency == currency,
+                LedgerEntry.occurred_at >= start
+            )
+            .group_by(LedgerEntry.category)
+            .order_by(total.desc())
+        )).all()
+        return [(category or "Other", int(cents)) for category, cents in rows]

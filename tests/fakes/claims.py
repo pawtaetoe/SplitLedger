@@ -12,9 +12,12 @@ class FakeClaims:
     async def by_code(self, inbound: Inbound, text: str, transport: Transport) -> None:
         self.calls.append(f"code {text}")
 
-    # record a claim in words
-    async def free_text(self, inbound: Inbound, text: str, transport: Transport) -> None:
-        self.calls.append(f"words {text}")
+    # record a claim in words, with the bill code when one was given
+    async def free_text(
+        self, inbound: Inbound, text: str, transport: Transport, code: str | None = None,
+        quiet: bool = False
+    ) -> None:
+        self.calls.append(f"words {text}" + (f" on {code}" if code else ""))
 
     # record a claim button
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:

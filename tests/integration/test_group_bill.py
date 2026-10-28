@@ -49,9 +49,10 @@ async def test_bill_from_receipt(sessions):
         me = (await session.execute(select(User).where(User.wa_user_id == ME))).scalar_one()
     assert (bill.total, bill.currency, bill.payer_id) == (11880, "SGD", me.id)
     assert sum(item.price_cents for item in items) == bill.subtotal == 10000
-    assert [item.name for item in items] == ["Chilli crab", "Beer"]
+    # two beers become one row each so different people can have them
+    assert [item.name for item in items] == ["Chilli crab", "Beer", "Beer"]
     assert payer.user_id == me.id
-    ready, forward = (text for _, text in transport.sent_text)
+    ready, forward = transport.sent_buttons[-1][1], transport.sent_text[-1][1]
     assert ready == bill_module.READY.format(bill.code)
     assert f"https://wa.me/6512345678?text=CLAIM%20{bill.code}" in forward
     token = forward.split("https://sl.test/c/")[1].split("\n")[0]
@@ -90,7 +91,7 @@ async def test_even_split_from_photo(sessions):
     async with sessions() as session:
         bill = (await session.execute(select(Bill))).scalar_one()
     assert bill.even_ways == 4
-    ready, forward = (text for _, text in transport.sent_text)
+    ready, forward = transport.sent_buttons[-1][1], transport.sent_text[-1][1]
     assert ready == bill_module.READY_EVEN.format(4, bill.code, "CHF 64.17", "CHF 64.18")
     assert "Split evenly 4 ways: *CHF 64.17* each." in forward
 
@@ -109,3 +110,31 @@ async def test_split_evenly_after(sessions):
     assert "Split evenly 4 ways: *SGD 29.70* each." in transport.sent_text[-1][1]
     await group.split_evenly(text, transport, 1)
     assert transport.sent_text[-1][1] == bill_module.BAD_WAYS
+
+
+# an unsure split saves the bill quietly, asks how, and sends the usual messages once answered
+async def test_unsure_asks_how(sessions):
+    group, transport = maker(sessions, DINNER)
+    assert await group.from_receipt(PHOTO, transport, 4, unsure=True) is None
+    _, ask, buttons = transport.sent_buttons[-1]
+    assert ask == bill_module.HOW.format("SGD 118.80", bill_module.HOW_ITEMS)
+    assert [title for _, title in buttons] == ["By what each had", "Evenly, 4 ways"]
+    assert transport.sent_text == []
+    even = buttons[1][0]
+    await group.on_button(Inbound("m2", ME, "button", button_id=even), even, transport)
+    async with sessions() as session:
+        bill = (await session.execute(select(Bill))).scalar_one()
+    assert bill.even_ways == 4
+    assert "Split evenly 4 ways: *SGD 29.70* each." in transport.sent_text[-1][1]
+
+
+# a receipt that doesn't add up offers even only, and even without a head count asks how many
+async def test_unsure_even_only(sessions):
+    group, transport = maker(sessions, DINNER.model_copy(update={"total_cents": 20000}))
+    await group.from_receipt(PHOTO, transport, None, unsure=True)
+    _, ask, buttons = transport.sent_buttons[-1]
+    assert ask.endswith(bill_module.HOW_EVEN_ONLY)
+    assert [title for _, title in buttons] == ["Evenly"]
+    even = buttons[0][0]
+    await group.on_button(Inbound("m2", ME, "button", button_id=even), even, transport)
+    assert transport.sent_text[-1][1] == bill_module.HOW_MANY

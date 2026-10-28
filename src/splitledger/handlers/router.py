@@ -3,6 +3,7 @@ import logging
 import re
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
@@ -13,6 +14,7 @@ from splitledger.handlers.ask import SpendAssistant
 from splitledger.handlers.bill import GroupBills
 from splitledger.handlers.bills import UpcomingBills
 from splitledger.handlers.claim import ClaimChat
+from splitledger.handlers.dashboard import LINK_MINUTES, DashboardLink
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.plan import PlanManager
 from splitledger.llm.client import MetaLLM
@@ -23,7 +25,7 @@ from splitledger.plans.afford_sg import SG_RULES
 from splitledger.plans.quota import QuotaBook
 from splitledger.settings import settings
 from splitledger.split.claims import ClaimBook
-from splitledger.split.tokens import ClaimTokens
+from splitledger.split.tokens import ClaimTokens, LoginLinks
 
 LOG = logging.getLogger(__name__)
 # add a region with a new schemas module and list it here
@@ -41,8 +43,15 @@ QUESTION_WORDS = frozenset(
     {"how", "what", "when", "where", "which", "who", "why", "am", "is", "are", "did", "do",
      "does", "show", "list"}
 )
+# the payer closing their bill in words
+CLOSE = re.compile(r"^(close|finish|finalise|finalize)\s+(the\s+|my\s+)?bill\b", re.IGNORECASE)
+# a caption longer than this may say who had what
+CAPTION_WORDS = 3
 # a head count in a split like 4 ways or 4 pax
 WAYS = re.compile(r"\b(\d{1,2})\s*(?:ways?|pax|people|persons?)\b", re.IGNORECASE)
+SplitMode = Literal["even", "items", "unsure"]
+# words that mean a split by what each person had, not an even one
+BY_ITEM = frozenset({"dish", "dishes", "item", "items", "own", "had"})
 # words that mark a bill they expect rather than one they paid
 REPEAT_WORDS = frozenset({"every", "monthly", "weekly", "yearly", "upcoming"})
 HELP = "*What would you like to do?*\nTap one below."
@@ -54,6 +63,7 @@ MENU = [
     ("menu:split", "Split a bill — share a receipt with friends"),
     ("menu:bills", "Upcoming bills — see, add or get reminders"),
     ("menu:plan", "Budget plan — set one up or see how you're doing"),
+    ("menu:dash", "My dashboard — who owes whom, bills and this month"),
     ("menu:undo", "Undo last entry — remove what you just saved")
 ]
 SPLIT_HINT = (
@@ -67,6 +77,8 @@ HINTS = {
     "menu:ask": "*Ask in your own words*\n- _how much on food this month?_\n"
                 "- _what were my biggest buys last week?_\n- _can I afford a 300 hotel?_"
 }
+# typed words that send the dashboard link without asking the model
+DASH_WORDS = frozenset({"dashboard", "overview", "summary"})
 # typed words that open the menu without asking the model
 MENU_WORDS = frozenset({"menu", "help", "options"})
 
@@ -98,8 +110,12 @@ class MessageReader:
     def by_rules(self, text: str) -> MessageResult:
         words = words_in(text)
         if "split" in words:
-            ways = WAYS.search(text)
-            return MessageResult(intent="split", ways=int(ways.group(1)) if ways else None)
+            by_item = bool(BY_ITEM.intersection(words))
+            ways = None if by_item else WAYS.search(text)
+            mode: SplitMode = "items" if by_item else ("even" if ways else "unsure")
+            return MessageResult(
+                intent="split", ways=int(ways.group(1)) if ways else None, split_mode=mode
+            )
         if text.rstrip().endswith("?") or (words and words[0] in QUESTION_WORDS):
             return MessageResult(intent="ask")
         if REPEAT_WORDS.intersection(words):
@@ -113,10 +129,12 @@ class MessageReader:
 # routes one inbound message, fixed rules for bot formats and the model for language
 class Router:
     # logger for saving, reader for free text, assistant for questions, plans for budgets
-    # bills for what the user expects to pay, group for shared bills and claims for who had what
+    # bills for what the user expects to pay, group for shared bills, claims for who had what
+    # and dash for the dashboard link
     def __init__(
         self, logger: ExpenseLogger, reader: MessageReader, assistant: SpendAssistant,
-        plans: PlanManager, bills: UpcomingBills, group: GroupBills, claims: ClaimChat
+        plans: PlanManager, bills: UpcomingBills, group: GroupBills, claims: ClaimChat,
+        dash: DashboardLink
     ) -> None:
         self._logger = logger
         self._reader = reader
@@ -125,6 +143,7 @@ class Router:
         self._bills = bills
         self._group = group
         self._claims = claims
+        self._dash = dash
 
     # greet new users, then pick the handler for this message
     async def handle(self, inbound: Inbound, transport: Transport) -> None:
@@ -158,6 +177,9 @@ class Router:
         if button_id.startswith("bills:"):
             await self._bills.on_button(inbound, button_id, transport)
             return
+        if button_id.startswith("bill:"):
+            await self._group.on_button(inbound, button_id, transport)
+            return
         if button_id.startswith("claim:"):
             await self._claims.on_button(inbound, button_id, transport)
             return
@@ -178,7 +200,11 @@ class Router:
         caption = (inbound.text or "").strip()
         result = await self._reader.read(caption) if caption else None
         if result is not None and result.intent == "split":
-            await self._group.from_receipt(inbound, transport, result.ways)
+            unsure = result.split_mode == "unsure"
+            bill = await self._group.from_receipt(inbound, transport, result.ways, unsure)
+            # a caption that says who had what is read as claims on the new bill
+            if bill is not None and not result.ways and len(words_in(caption)) > CAPTION_WORDS:
+                await self._claims.free_text(inbound, caption, transport, bill.code, quiet=True)
             return
         await self._logger.log_receipt(inbound, transport)
 
@@ -199,8 +225,14 @@ class Router:
         if self._plans.waiting_for_text(inbound.user_id):
             await self._plans.on_text(inbound, transport)
             return
+        if words_in(text) and set(words_in(text)) <= DASH_WORDS | {"my", "open", "the"}:
+            await self._dash.send(inbound, transport)
+            return
         if words_in(text) and set(words_in(text)) <= MENU_WORDS:
             await self.menu(inbound, transport)
+            return
+        if CLOSE.match(text):
+            await self._group.close_latest(inbound, transport)
             return
         if CLAIM.match(text):
             await self._claims.by_code(inbound, text, transport)
@@ -245,6 +277,9 @@ class Router:
         if button_id == "menu:plan":
             await self._plans.show(inbound, transport)
             return
+        if button_id == "menu:dash":
+            await self._dash.send(inbound, transport)
+            return
         if button_id == "menu:undo":
             await self._logger.undo_last(inbound, transport)
             return
@@ -269,5 +304,9 @@ message_router = Router(
     PlanManager(SessionFactory, book, locale, llm),
     bills,
     group,
-    ClaimChat(SessionFactory, llm, ClaimBook(SessionFactory), locale)
+    ClaimChat(SessionFactory, llm, ClaimBook(SessionFactory), locale),
+    DashboardLink(
+        SessionFactory, LoginLinks(ClaimTokens(settings.app_secret), LINK_MINUTES * 60),
+        settings.public_base_url, locale
+    )
 )

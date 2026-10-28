@@ -92,11 +92,16 @@ class ClaimChat:
         await self._claim_numbers(inbound, transport, view, numbers)
 
     # read who had what from plain words, then show everyone's share before saving
-    async def free_text(self, inbound: Inbound, text: str, transport: Transport) -> None:
-        bill = await self._bill_for(inbound)
+    # a code picks the bill, quiet stays silent when the words name nobody
+    async def free_text(
+        self, inbound: Inbound, text: str, transport: Transport, code: str | None = None,
+        quiet: bool = False
+    ) -> None:
+        bill = await self._book.open_bill(code) if code else await self._bill_for(inbound)
         if bill is None:
             await transport.send_text(inbound.user_id, NO_BILL)
             return
+        self._context[inbound.user_id] = bill.code
         view = await self._view(bill, None)
         listing = "\n".join(
             f"{n}. {line.name}{f' x{line.qty}' if line.qty > 1 else ''}"
@@ -114,9 +119,9 @@ class ClaimChat:
             result = ClaimMap()
         claims = self._valid(result, view.lines)
         if not claims:
-            await transport.send_text(inbound.user_id, NO_MATCH.format(bill.code))
+            if not quiet:
+                await transport.send_text(inbound.user_id, NO_MATCH.format(bill.code))
             return
-        self._context[inbound.user_id] = bill.code
         self._drafts[inbound.user_id] = Draft(bill, claims)
         await self._confirm(inbound, transport, view, claims)
 

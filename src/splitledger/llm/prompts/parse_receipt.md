@@ -8,3 +8,4 @@ total_cents is the final amount paid, or null when you cannot read it.
 vendor is the shop or restaurant name, or null.
 currency is the ISO code when printed or clearly implied, otherwise null.
 category is one of Dining, Groceries, Transport, Shopping, Bills, Entertainment, Health, Travel, Other.
+Write names with their real letters, like Zürcher or Rösti, never escape codes.

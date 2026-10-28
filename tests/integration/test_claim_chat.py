@@ -115,3 +115,13 @@ async def test_no_match_and_change(sessions):
     assert transport.sent_text[-1][1] == claim_module.CHANGE
     async with sessions() as session:
         assert (await session.execute(select(ItemClaim))).first() is None
+
+
+# a caption with no claims in it stays silent on the new bill
+async def test_quiet_caption(sessions):
+    await seed(sessions)
+    transport = FakeTransport()
+    await chat(sessions, ClaimMap()).free_text(
+        text(PAYER, "split with the team"), "split with the team", transport, "K7Q2AB", quiet=True
+    )
+    assert transport.sent_text == [] and transport.sent_buttons == []

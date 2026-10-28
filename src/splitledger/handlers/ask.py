@@ -192,15 +192,17 @@ class SpendTools:
 
     # open money owed to the user, by friend
     async def who_owes_me(self, args: dict[str, Any]) -> dict[str, Any]:
+        # friends without an account are named by the note on their row
+        who = func.coalesce(User.display_name, LedgerEntry.note)
         query = (
-            select(User.display_name, LedgerEntry.currency, func.sum(LedgerEntry.amount_cents))
+            select(who, LedgerEntry.currency, func.sum(LedgerEntry.amount_cents))
             .join(User, LedgerEntry.counterparty_id == User.id, isouter=True)
             .where(
                 LedgerEntry.user_id == self._user_id,
                 LedgerEntry.kind == LedgerKind.RECEIVABLE,
                 LedgerEntry.voided_at.is_(None)
             )
-            .group_by(User.display_name, LedgerEntry.currency)
+            .group_by(who, LedgerEntry.currency)
         )
         async with self._sessions() as session:
             rows = (await session.execute(query)).all()

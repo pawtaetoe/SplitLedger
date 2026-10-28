@@ -4,7 +4,8 @@ import pytest
 
 from splitledger.db.models import Bill, BillItem
 from splitledger.handlers import bill as bill_module
-from splitledger.handlers.bill import even_share, even_text, forward_text, new_code
+from splitledger.handlers.bill import even_share, even_text, forward_text, new_code, units
+from splitledger.llm.schemas import ReceiptDraft, ReceiptItem
 from splitledger.split.tokens import ClaimTokens
 
 NOW = datetime(2026, 10, 28, 12, tzinfo=UTC)
@@ -64,3 +65,23 @@ def test_even_share():
     bill = Bill(code="K7Q2AB", vendor=None, currency="CHF", total=25669, even_ways=4)
     text = even_text(bill, "https://x/c/t", "https://wa.me/1")
     assert text.startswith("*Bill · CHF 256.69*\nSplit evenly 4 ways: *CHF 64.17* each.")
+
+
+# a line of several becomes one row each with the odd cents on the first, huge counts stay whole
+def test_units():
+    receipt = ReceiptDraft(items=[
+        ReceiptItem(name="Beer", qty=3, price_cents=1000),
+        ReceiptItem(name="Dumplings", qty=40, price_cents=4000),
+        ReceiptItem(name="Rosti", price_cents=2850)
+    ])
+    assert units(receipt) == [
+        ("Beer", 334), ("Beer", 333), ("Beer", 333), ("Dumplings", 4000), ("Rosti", 2850)
+    ]
+
+
+# escape codes from the model become real letters
+def test_receipt_names_unescaped():
+    item = ReceiptItem(name="Schweins Geschn Zu00fcrcherart", price_cents=2900)
+    assert item.name == "Schweins Geschn Zürcherart"
+    assert ReceiptDraft(vendor="Caf\\u00e9 Menu00fc").vendor == "Café Menü"
+    assert ReceiptItem(name="Menu 3", price_cents=100).name == "Menu 3"

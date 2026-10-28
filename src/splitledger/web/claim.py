@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -83,6 +83,34 @@ class ClaimPage:
             error = await self._book.claim(view.bill.id, view.me.id, uuid.UUID(item), action)
         except ValueError:
             error = TRY_AGAIN
+        return await self._after(token, request, error)
+
+    # the ticked boxes become exactly this person's items
+    async def set_mine(self, token: str, request: Request, items: list[str]) -> Response:
+        view = await self._view(token, request)
+        if view is None:
+            return render("claim_error.html", 404)
+        if view.me is None:
+            return RedirectResponse(f"/c/{token}", 303)
+        try:
+            ids = {uuid.UUID(item) for item in items}
+            error = await self._book.set_mine(view.bill.id, view.me.id, ids)
+        except ValueError:
+            error = TRY_AGAIN
+        return await self._after(token, request, error)
+
+    # the payer switches an even split to friends ticking their own items
+    async def by_item(self, token: str, request: Request) -> Response:
+        view = await self._view(token, request)
+        if view is None:
+            return render("claim_error.html", 404)
+        if view.me is None:
+            return RedirectResponse(f"/c/{token}", 303)
+        error = await self._book.to_items(view.bill.id, view.me.id)
+        return await self._after(token, request, error)
+
+    # htmx gets the new bill back, plain forms get the whole page
+    async def _after(self, token: str, request: Request, error: str | None) -> Response:
         if not request.headers.get("HX-Request"):
             return await self.show(token, request, error)
         fresh = await self._view(token, request)
@@ -119,3 +147,17 @@ async def claim(
     token: str, request: Request, item: str = Form(""), action: str = Form("")
 ) -> Response:
     return await claim_page.claim(token, request, item, action)
+
+
+# save the ticked items
+@claim_router.post("/c/{token}/mine")
+async def mine(
+    token: str, request: Request, items: Annotated[list[str] | None, Form()] = None
+) -> Response:
+    return await claim_page.set_mine(token, request, items or [])
+
+
+# switch an even split to ticking items
+@claim_router.post("/c/{token}/by-item")
+async def by_item(token: str, request: Request) -> Response:
+    return await claim_page.by_item(token, request)

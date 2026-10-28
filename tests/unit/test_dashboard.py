@@ -1,0 +1,51 @@
+import uuid
+from datetime import UTC, datetime, timedelta
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from splitledger.split.tokens import ClaimTokens, LoginLinks
+from splitledger.web import dashboard as dashboard_module
+from splitledger.web.dashboard import DashboardPage, dashboard_router
+
+NOW = datetime(2026, 10, 28, 12, tzinfo=UTC)
+
+
+# an overview that must never be reached
+class NoOverview:
+    # fail loudly if a bad sign in got through
+    async def build(self, user_id):
+        raise AssertionError("bad sign ins must not reach the database")
+
+
+# a link works until it expires, any change breaks it, and a claim cookie is never a login
+def test_login_links():
+    tokens = ClaimTokens("secret")
+    links = LoginLinks(tokens, 15 * 60)
+    user = str(uuid.uuid4())
+    link = links.make(user, NOW)
+    assert links.read(link, NOW + timedelta(minutes=14)) == user
+    assert links.read(link, NOW + timedelta(minutes=16)) is None
+    assert links.read(link.replace(user[:4], "ffff"), NOW) is None
+    assert links.read(tokens.seal(user), NOW) is None
+    assert LoginLinks(ClaimTokens("other"), 900).read(link, NOW) is None
+    assert LoginLinks(ClaimTokens(""), 900).read(link, NOW) is None
+
+
+# a bad link and a missing cookie explain how to get in, without touching the database
+def test_sign_in_pages(monkeypatch):
+    page = DashboardPage(ClaimTokens("secret"), NoOverview(), False)
+    monkeypatch.setattr(dashboard_module, "dashboard_page", page)
+    app = FastAPI()
+    app.include_router(dashboard_router)
+    web = TestClient(app)
+    an_hour_ago = datetime.now(UTC) - timedelta(hours=1)
+    expired = LoginLinks(ClaimTokens("secret"), 900).make(str(uuid.uuid4()), an_hour_ago)
+    response = web.get(f"/d/{expired}", follow_redirects=False)
+    assert response.status_code == 401 and "This link has expired" in response.text
+    response = web.get("/me")
+    assert response.status_code == 401 and "Open your dashboard from WhatsApp" in response.text
+    fresh = LoginLinks(ClaimTokens("secret"), 900).make(str(uuid.uuid4()), datetime.now(UTC))
+    response = web.get(f"/d/{fresh}", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/me"
+    assert "sl_me=" in response.headers["set-cookie"]

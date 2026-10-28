@@ -4,12 +4,13 @@ import pytest
 
 import splitledger.handlers.router as router_module
 from splitledger.contracts.messages import Inbound
-from splitledger.db.models import LedgerSource
+from splitledger.db.models import Bill, LedgerSource
 from splitledger.handlers.router import HELP, UNCLEAR, MessageReader, Router
 from splitledger.llm.schemas import ExpenseDraft, MessageResult
 from splitledger.llm.schemas_sg import SG
 from tests import fakes
 from tests.fakes import FakeAssistant, FakeBills, FakeLLM, FakeLogger, FakePlans, FakeTransport
+from tests.fakes.router import fake_router
 
 USER = "6581234567"
 
@@ -41,14 +42,8 @@ def said(intent: str, cents: int | None = None) -> MessageResult:
 
 
 # a router with fakes for every handler not given
-def build(
-    llm: FakeLLM, logger=None, assistant=None, plans=None, bills=None, group=None, claims=None
-) -> Router:
-    return Router(
-        logger or FakeLogger(), MessageReader(llm, SG), assistant or FakeAssistant(),
-        plans or FakePlans(), bills or FakeBills(), group or fakes.FakeGroup(),
-        claims or fakes.FakeClaims()
-    )
+def build(llm: FakeLLM, logger=None, assistant=None, **given) -> Router:
+    return fake_router(llm, SG, logger=logger, assistant=assistant, **given)
 
 
 # name the handler a message reached from the fakes or the reply text
@@ -255,6 +250,10 @@ def test_rules_read_ways():
     assert reader.by_rules("split this 3 ways").ways == 3
     assert reader.by_rules("split among 5 pax").ways == 5
     assert reader.by_rules("split this").ways is None
+    assert reader.by_rules("split this 7 ways by dish").ways is None
+    assert reader.by_rules("split this 7 ways by dish").split_mode == "items"
+    assert reader.by_rules("split this").split_mode == "unsure"
+    assert reader.by_rules("split 4 ways").split_mode == "even"
 
 
 # claim codes, claim buttons and claims in words reach the claim chat
@@ -268,3 +267,44 @@ async def test_claim_routes():
     assert claims.calls == [
         "code CLAIM K7Q2AB 1,3", "button claim:ok", "words Anna and Ben shared the calamari"
     ]
+
+
+# close buttons and closing in words reach the group bill handler
+async def test_close_routes():
+    group = fakes.FakeGroup()
+    router = build(FakeLLM(), group=group)
+    await router.handle(button("bill:close:K7Q2AB"), FakeTransport())
+    await router.handle(text("close the bill"), FakeTransport())
+    assert group.calls == ["button bill:close:K7Q2AB", "close"]
+
+
+# a caption saying who had what is read as claims on the bill it just made
+async def test_caption_claims_after_split():
+    group = fakes.FakeGroup()
+    group.bill = Bill(code="K7Q2AB")
+    claims = fakes.FakeClaims()
+    llm = FakeLLM({"read_message": MessageResult(intent="split")})
+    router = build(llm, group=group, claims=claims)
+    caption = "split 7 ways by dish, I had the rosti and shared the beer"
+    await router.handle(image(caption), FakeTransport())
+    await router.handle(image("split"), FakeTransport())
+    assert group.calls == ["split None", "split None"]
+    assert claims.calls == [f"words {caption} on K7Q2AB"]
+
+
+# an unsure split asks the bill handler to check how before sharing anything
+async def test_unsure_split_asks():
+    group = fakes.FakeGroup()
+    llm = FakeLLM({"read_message": MessageResult(intent="split", split_mode="unsure")})
+    await build(llm, group=group).handle(image("split this"), FakeTransport())
+    assert group.calls == ["split None unsure"]
+
+
+# the menu choice and the word dashboard send the sign in link without the model
+async def test_dashboard_routes():
+    dash = fakes.FakeDash()
+    llm = FakeLLM()
+    router = build(llm, dash=dash)
+    await router.handle(button("menu:dash"), FakeTransport())
+    await router.handle(text("my dashboard"), FakeTransport())
+    assert dash.sent == 2 and llm.structured_calls == []

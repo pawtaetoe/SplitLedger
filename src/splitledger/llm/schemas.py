@@ -1,7 +1,8 @@
+import re
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Category = Literal[
     "Dining", "Groceries", "Transport", "Shopping", "Bills", "Entertainment", "Health",
@@ -83,11 +84,26 @@ class SmokeResult(BaseModel):
     text: str = ""
 
 
+# escape codes like u00fc a model sometimes writes instead of the letter
+ESCAPED = re.compile(r"\\?u(00[0-9a-fA-F]{2}|20[0-9a-fA-F]{2})")
+
+
+# text with leftover escape codes turned back into letters
+def unescape(text: str | None) -> str | None:
+    return ESCAPED.sub(lambda m: chr(int(m.group(1), 16)), text) if text else text
+
+
 # one line on a receipt with its line total
 class ReceiptItem(BaseModel):
     name: str
     qty: int = 1
     price_cents: int
+
+    # zürcher not zu00fcrcher
+    @field_validator("name")
+    @classmethod
+    def letters(cls, name: str) -> str:
+        return unescape(name) or name
 
 
 # one receipt read from a photo, money in cents
@@ -101,6 +117,12 @@ class ReceiptDraft(BaseModel):
     tax_cents: int = 0
     discount_cents: int = 0
     total_cents: int | None = None
+
+    # the shop name with real letters too
+    @field_validator("vendor")
+    @classmethod
+    def letters(cls, vendor: str | None) -> str | None:
+        return unescape(vendor)
 
 
 # one expense parsed from a message, currency none means the locale default
@@ -135,3 +157,5 @@ class MessageResult(BaseModel):
     expense: ExpenseDraft | None = None
     # people sharing evenly when a split says how many
     ways: int | None = None
+    # how a split should be shared, unsure when the message doesn't say
+    split_mode: Literal["even", "items", "unsure"] | None = None
