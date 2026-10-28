@@ -11,6 +11,7 @@ class Tool:
     name: str
     description: str
     run: Callable[[dict[str, Any]], Awaitable[Any]]
+    parameters: dict[str, Any] = field(default_factory=lambda: {"type": "object"})
 
 
 # outcome of one tool calling run

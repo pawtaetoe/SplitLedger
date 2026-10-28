@@ -9,6 +9,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerSource
 from splitledger.db.session import SessionFactory
+from splitledger.handlers.ask import SpendAssistant
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.llm.client import MetaLLM
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, Locale, MessageResult
@@ -40,7 +41,6 @@ HELP = (
 UNCLEAR = "Sorry, I didn't catch that. Try something like coffee 4.50, or send /help"
 # replies for intents whose handlers land in later tasks
 SOON = {
-    "ask": "Spending questions are coming soon",
     "split": "Group bill splitting is coming soon",
     "claim": "Claiming items on a bill is coming soon"
 }
@@ -84,10 +84,13 @@ class MessageReader:
 
 # routes one inbound message, fixed rules for bot formats and the model for language
 class Router:
-    # expense logger for logging and its buttons, reader for free text
-    def __init__(self, logger: ExpenseLogger, reader: MessageReader) -> None:
+    # logger for saving, reader for free text, assistant for questions
+    def __init__(
+        self, logger: ExpenseLogger, reader: MessageReader, assistant: SpendAssistant
+    ) -> None:
         self._logger = logger
         self._reader = reader
+        self._assistant = assistant
 
     # pick the handler for this message
     async def handle(self, inbound: Inbound, transport: Transport) -> None:
@@ -149,6 +152,9 @@ class Router:
             draft = result.expense or ExpenseDraft(amount_cents=None)
             await self._logger.log(inbound, transport, draft, source)
             return
+        if result.intent == "ask":
+            await self._assistant.answer(inbound, transport)
+            return
         if result.intent == "chat":
             await transport.send_text(inbound.user_id, HELP)
             return
@@ -157,4 +163,8 @@ class Router:
 
 llm = MetaLLM()
 locale = LOCALES[settings.locale]
-message_router = Router(ExpenseLogger(llm, SessionFactory, locale), MessageReader(llm, locale))
+message_router = Router(
+    ExpenseLogger(llm, SessionFactory, locale),
+    MessageReader(llm, locale),
+    SpendAssistant(llm, SessionFactory)
+)

@@ -1,63 +1,11 @@
-import asyncio
-import os
-import subprocess
-import sys
-
-import asyncpg
-import pytest
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, User
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
-from tests.fakes import FakeLLM, FakeTransport
-
-ADMIN_URL = "postgresql://splitledger:splitledger@localhost:5432/splitledger"
-TEST_DB = "splitledger_log_test"
-TEST_URL = f"postgresql+asyncpg://splitledger:splitledger@localhost:5432/{TEST_DB}"
-
-
-# db reachable check
-async def _reachable() -> bool:
-    try:
-        conn = await asyncpg.connect(ADMIN_URL)
-    except Exception:
-        return False
-    await conn.close()
-    return True
-
-
-pytestmark = pytest.mark.skipif(not asyncio.run(_reachable()), reason="compose db not running")
-
-
-# run one admin statement on the compose db
-async def _admin(sql: str) -> None:
-    conn = await asyncpg.connect(ADMIN_URL)
-    await conn.execute(sql)
-    await conn.close()
-
-
-# fresh migrated db per test
-@pytest.fixture
-async def sessions():
-    await _admin(f'DROP DATABASE IF EXISTS "{TEST_DB}"')
-    await _admin(f'CREATE DATABASE "{TEST_DB}"')
-    env = dict(os.environ)
-    env["DATABASE_URL"] = TEST_URL
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        capture_output=True,
-        env=env,
-        text=True
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    engine = create_async_engine(TEST_URL)
-    yield async_sessionmaker(engine, expire_on_commit=False)
-    await engine.dispose()
-    await _admin(f'DROP DATABASE IF EXISTS "{TEST_DB}"')
+from tests.fakes import FakeAssistant, FakeLLM, FakeTransport
 
 
 # one text message from a user
@@ -154,7 +102,8 @@ async def test_voice_note_logged(sessions):
     transport.media["note-1"] = b"OggS" + bytes(2) + (3 * 48000).to_bytes(8, "little")
     llm = FakeLLM()
     llm.transcript = "Just spent 45 on petrol at Shell"
-    router = Router(ExpenseLogger(llm, sessions, GLOBAL), MessageReader(llm, GLOBAL))
+    logger = ExpenseLogger(llm, sessions, GLOBAL)
+    router = Router(logger, MessageReader(llm, GLOBAL), FakeAssistant())
     await router.handle(Inbound("m1", "6581234567", "audio", media_ref="note-1"), transport)
     assert transport.sent_text == [("6581234567", "Heard: Just spent 45 on petrol at Shell")]
     assert transport.sent_buttons[0][1].startswith("Logged USD 45.00 · Transport")

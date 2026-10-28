@@ -15,14 +15,16 @@ class Locale:
     currency: str
     symbols: tuple[str, ...]
     words: dict[Category, tuple[str, ...]]
+    timezone: str = "UTC"
 
-    # this locale plus a region of its own currency, symbols and extra words
+    # this locale plus a region of its own currency, symbols, extra words and timezone
     def extend(
-        self, currency: str, symbols: tuple[str, ...], words: dict[Category, tuple[str, ...]]
+        self, currency: str, symbols: tuple[str, ...], words: dict[Category, tuple[str, ...]],
+        timezone: str
     ) -> "Locale":
         keys = {*self.words, *words}
         merged = {key: self.words.get(key, ()) + words.get(key, ()) for key in keys}
-        return Locale(currency, symbols, merged)
+        return Locale(currency, symbols, merged, timezone)
 
 
 # common currency codes, any of these in a message lets the model pick the currency

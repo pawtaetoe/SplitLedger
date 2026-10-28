@@ -8,7 +8,7 @@ from splitledger.db.models import LedgerSource
 from splitledger.handlers.router import HELP, SOON, UNCLEAR, MessageReader, Router
 from splitledger.llm.schemas import ExpenseDraft, MessageResult
 from splitledger.llm.schemas_sg import SG
-from tests.fakes import FakeLLM, FakeLogger, FakeTransport
+from tests.fakes import FakeAssistant, FakeLLM, FakeLogger, FakeTransport
 
 USER = "6581234567"
 
@@ -39,8 +39,10 @@ def said(intent: str, cents: int | None = None) -> MessageResult:
     return MessageResult(intent=intent, expense=expense)
 
 
-# name the handler a message reached from the reply text or the fake logger
-def landed(logger: FakeLogger, transport: FakeTransport) -> str:
+# name the handler a message reached from the assistant, reply text or fake logger
+def landed(logger: FakeLogger, transport: FakeTransport, assistant: FakeAssistant) -> str:
+    if assistant.asked:
+        return "ask"
     replies = [reply for _, reply in transport.sent_text]
     if HELP in replies:
         return "help"
@@ -56,12 +58,13 @@ def landed(logger: FakeLogger, transport: FakeTransport) -> str:
 # route one message with a fake logger and an optional canned model reply
 async def route(
     inbound: Inbound, reply: MessageResult | None
-) -> tuple[FakeLogger, FakeTransport, FakeLLM]:
+) -> tuple[str, FakeLogger, FakeLLM]:
     llm = FakeLLM({"read_message": reply} if reply else {})
     logger = FakeLogger()
     transport = FakeTransport()
-    await Router(logger, MessageReader(llm, SG)).handle(inbound, transport)
-    return logger, transport, llm
+    assistant = FakeAssistant()
+    await Router(logger, MessageReader(llm, SG), assistant).handle(inbound, transport)
+    return landed(logger, transport, assistant), logger, llm
 
 
 # bot formats are handled by rule and never reach the model
@@ -82,8 +85,8 @@ PROTOCOL_ROWS = [
 
 @pytest.mark.parametrize(("inbound", "expected"), PROTOCOL_ROWS)
 async def test_protocol_rows(inbound, expected):
-    logger, transport, llm = await route(inbound, None)
-    assert landed(logger, transport) == expected
+    where, _, llm = await route(inbound, None)
+    assert where == expected
     assert llm.structured_calls == []
 
 
@@ -104,14 +107,14 @@ MODEL_ROWS = [
 
 @pytest.mark.parametrize(("inbound", "reply", "expected"), MODEL_ROWS)
 async def test_model_rows(inbound, reply, expected):
-    logger, transport, llm = await route(inbound, reply)
-    assert landed(logger, transport) == expected
+    where, _, llm = await route(inbound, reply)
+    assert where == expected
     assert len(llm.structured_calls) == 1
 
 
 # a log with no amount from the model still reaches the logger to ask for one
 async def test_log_without_expense_asks_logger():
-    logger, _, _ = await route(text("bought stuff"), said("log"))
+    _, logger, _ = await route(text("bought stuff"), said("log"))
     assert logger.drafts[0][0].amount_cents is None
 
 
@@ -120,7 +123,8 @@ async def test_voice_goes_through_reader():
     llm = FakeLLM({"read_message": said("log", 4500)})
     logger = FakeLogger()
     logger.heard = "spent 45 on petrol"
-    await Router(logger, MessageReader(llm, SG)).handle(audio("note-1"), FakeTransport())
+    router = Router(logger, MessageReader(llm, SG), FakeAssistant())
+    await router.handle(audio("note-1"), FakeTransport())
     assert logger.calls == ["transcribe", "log"]
     assert logger.drafts[0][1] == LedgerSource.VOICE
 
@@ -130,9 +134,10 @@ async def test_spoken_question_is_not_logged():
     llm = FakeLLM({"read_message": said("ask")})
     logger = FakeLogger()
     logger.heard = "how much did I spend this week"
-    transport = FakeTransport()
-    await Router(logger, MessageReader(llm, SG)).handle(audio("note-1"), transport)
-    assert landed(logger, transport) == "ask"
+    assistant = FakeAssistant()
+    router = Router(logger, MessageReader(llm, SG), assistant)
+    await router.handle(audio("note-1"), FakeTransport())
+    assert assistant.asked == ["how much did I spend this week"]
 
 
 # when the model fails the keyword rules still route the basics
@@ -147,8 +152,8 @@ FALLBACK_ROWS = [
 
 @pytest.mark.parametrize(("inbound", "expected"), FALLBACK_ROWS)
 async def test_fallback_rows(inbound, expected):
-    logger, transport, _ = await route(inbound, None)
-    assert landed(logger, transport) == expected
+    where, _, _ = await route(inbound, None)
+    assert where == expected
 
 
 # a slow model is cut off and the rules answer instead

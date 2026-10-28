@@ -238,9 +238,13 @@ class ExpenseLogger:
     # get or create the user, safe when two messages arrive together
     async def _user_id(self, session: AsyncSession, wa_user_id: str) -> uuid.UUID:
         await session.execute(
-            insert(User).values(wa_user_id=wa_user_id).on_conflict_do_nothing(
-                index_elements=["wa_user_id"]
+            insert(User)
+            .values(
+                wa_user_id=wa_user_id,
+                currency=self._locale.currency,
+                timezone=self._locale.timezone
             )
+            .on_conflict_do_nothing(index_elements=["wa_user_id"])
         )
         found = await session.execute(select(User.id).where(User.wa_user_id == wa_user_id))
         return found.scalar_one()

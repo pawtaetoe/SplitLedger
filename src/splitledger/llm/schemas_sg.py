@@ -11,5 +11,6 @@ SG = GLOBAL.extend(
         "Shopping": ("shopee", "lazada", "qoo10"),
         "Bills": ("singtel", "starhub"),
         "Health": ("polyclinic", "guardian", "watsons")
-    }
+    },
+    "Asia/Singapore"
 )

@@ -14,7 +14,7 @@ from splitledger.settings import settings
 
 T = TypeVar("T")
 
-MAX_TOOL_ROUNDS = 8
+MAX_TOOL_ROUNDS = 4
 
 
 # fixture file for one prompt and its images
@@ -129,7 +129,7 @@ class MetaLLM:
                 "function": {
                     "name": tool.name,
                     "description": tool.description,
-                    "parameters": {"type": "object"}
+                    "parameters": tool.parameters
                 }
             }
             for tool in tools
