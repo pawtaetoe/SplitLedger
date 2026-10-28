@@ -13,7 +13,7 @@ import splitledger.channels.whatsapp as whatsapp
 from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL
 from splitledger.settings import settings
-from tests.fakes import FakeAssistant, FakeLLM, FakeLogger, FakePlans, FakeTransport
+from tests.fakes import FakeAssistant, FakeBills, FakeLLM, FakeLogger, FakePlans, FakeTransport
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "whatsapp"
 SECRET = "test-secret"
@@ -57,7 +57,8 @@ def test_verify_signature():
 # swap in a fake channel with in memory dedupe
 def use_fake_channel(monkeypatch) -> FakeTransport:
     fake = FakeTransport()
-    router = Router(FakeLogger(), MessageReader(FakeLLM(), GLOBAL), FakeAssistant(), FakePlans())
+    reader = MessageReader(FakeLLM(), GLOBAL)
+    router = Router(FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills())
     channel = whatsapp.WhatsAppChannel(fake, router)
     seen: set[str] = set()
 

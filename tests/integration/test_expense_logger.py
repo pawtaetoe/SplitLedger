@@ -5,7 +5,7 @@ from splitledger.db.models import LedgerEntry, User
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
-from tests.fakes import FakeAssistant, FakeLLM, FakePlans, FakeTransport
+from tests.fakes import FakeAssistant, FakeBills, FakeLLM, FakePlans, FakeTransport
 
 
 # one text message from a user
@@ -103,7 +103,7 @@ async def test_voice_note_logged(sessions):
     llm = FakeLLM()
     llm.transcript = "Just spent 45 on petrol at Shell"
     logger = ExpenseLogger(llm, sessions, GLOBAL)
-    router = Router(logger, MessageReader(llm, GLOBAL), FakeAssistant(), FakePlans())
+    router = Router(logger, MessageReader(llm, GLOBAL), FakeAssistant(), FakePlans(), FakeBills())
     await router.handle(Inbound("m1", "6581234567", "audio", media_ref="note-1"), transport)
     assert transport.sent_text == [("6581234567", "*I heard*\n> Just spent 45 on petrol at Shell")]
     assert transport.sent_buttons[0][1].startswith("✅ *Logged USD 45.00*\nTransport")

@@ -10,6 +10,7 @@ from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerSource
 from splitledger.db.session import SessionFactory
 from splitledger.handlers.ask import SpendAssistant
+from splitledger.handlers.bills import UpcomingBills
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.plan import PlanManager
 from splitledger.llm.client import MetaLLM
@@ -38,15 +39,24 @@ QUESTION_WORDS = frozenset(
 )
 # words that mark a bill they expect rather than one they paid
 REPEAT_WORDS = frozenset({"every", "monthly", "weekly", "yearly", "upcoming"})
-HELP = (
-    "*What I can do*\n"
-    "- Log: type _coffee 4.50_, or send a receipt photo or voice note\n"
-    "- Ask: _how much did I spend this week?_\n"
-    "- Plan ahead: _rent 1200 every month on the 1st_\n"
-    "- Budget: say _set up a plan_\n"
-    "- Undo your last entry: send /undo"
-)
-UNCLEAR = "*Sorry, I didn't catch that*\nTry something like _coffee 4.50_, or send /help."
+HELP = "*What would you like to do?*\nTap one below."
+UNCLEAR = "*Sorry, I didn't catch that*\nTap one below, or type something like _coffee 4.50_."
+# the menu shown wherever the user might not know what to do next
+MENU = [
+    ("menu:log", "Log spending — type it, or send a photo or voice note"),
+    ("menu:ask", "Ask about my spending — totals, top buys, can I afford it"),
+    ("menu:bills", "Upcoming bills — see, add or get reminders"),
+    ("menu:plan", "Budget plan — set one up or see how you're doing"),
+    ("menu:undo", "Undo last entry — remove what you just saved")
+]
+HINTS = {
+    "menu:log": "*Log spending*\nType what you bought, like _coffee 4.50_.\n"
+                "Or send a receipt photo or a voice note.",
+    "menu:ask": "*Ask in your own words*\n- _how much on food this month?_\n"
+                "- _what were my biggest buys last week?_\n- _can I afford a 300 hotel?_"
+}
+# typed words that open the menu without asking the model
+MENU_WORDS = frozenset({"menu", "help", "options"})
 # replies for intents whose handlers land in later tasks
 SOON = {
     "split": "Group bill splitting is coming soon",
@@ -95,14 +105,16 @@ class MessageReader:
 # routes one inbound message, fixed rules for bot formats and the model for language
 class Router:
     # logger for saving, reader for free text, assistant for questions, plans for budgets
+    # and bills for what the user expects to pay
     def __init__(
         self, logger: ExpenseLogger, reader: MessageReader, assistant: SpendAssistant,
-        plans: PlanManager
+        plans: PlanManager, bills: UpcomingBills
     ) -> None:
         self._logger = logger
         self._reader = reader
         self._assistant = assistant
         self._plans = plans
+        self._bills = bills
 
     # greet new users, then pick the handler for this message
     async def handle(self, inbound: Inbound, transport: Transport) -> None:
@@ -128,14 +140,16 @@ class Router:
             return
         await transport.send_text(inbound.user_id, inbound.text or "")
 
-    # plan buttons go to plans, upcoming undo to the assistant, undo and receipt to the logger
+    # each button prefix goes to its handler, unknown ones echo
     async def _button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
         if button_id.startswith("plan:"):
             await self._plans.on_button(inbound, button_id, transport)
             return
-        if button_id.startswith("upcoming:undo:"):
-            keys = button_id.removeprefix("upcoming:undo:")
-            await self._assistant.undo_upcoming(inbound, keys, transport)
+        if button_id.startswith("bills:"):
+            await self._bills.on_button(inbound, button_id, transport)
+            return
+        if button_id.startswith("menu:"):
+            await self._menu_choice(inbound, button_id, transport)
             return
         if button_id.startswith("undo:"):
             await self._logger.undo(inbound, button_id.removeprefix("undo:"), transport)
@@ -166,10 +180,13 @@ class Router:
             if command == "/plan":
                 await self._plans.show(inbound, transport)
                 return
-            await transport.send_text(inbound.user_id, HELP)
+            await self.menu(inbound, transport)
             return
         if self._plans.waiting_for_text(inbound.user_id):
             await self._plans.on_text(inbound, transport)
+            return
+        if words_in(text) and set(words_in(text)) <= MENU_WORDS:
+            await self.menu(inbound, transport)
             return
         if CLAIM.match(text):
             await transport.send_text(inbound.user_id, SOON["claim"])
@@ -186,17 +203,43 @@ class Router:
             await self._plans.show(inbound, transport)
             return
         if result.intent == "chat":
-            await transport.send_text(inbound.user_id, HELP)
+            await self.menu(inbound, transport)
             return
-        await transport.send_text(inbound.user_id, SOON.get(result.intent, UNCLEAR))
+        if result.intent in SOON:
+            await transport.send_text(inbound.user_id, SOON[result.intent])
+            return
+        await self.menu(inbound, transport, UNCLEAR)
+
+    # what the user can do, as choices to tap rather than commands to remember
+    async def menu(self, inbound: Inbound, transport: Transport, text: str = HELP) -> None:
+        await transport.send_buttons(inbound.user_id, text, MENU)
+
+    # one menu choice, examples to copy for free text and the handler for the rest
+    async def _menu_choice(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
+        if button_id in HINTS:
+            await transport.send_text(inbound.user_id, HINTS[button_id])
+            return
+        if button_id == "menu:bills":
+            await self._bills.show(inbound, transport)
+            return
+        if button_id == "menu:plan":
+            await self._plans.show(inbound, transport)
+            return
+        if button_id == "menu:undo":
+            await self._logger.undo_last(inbound, transport)
+            return
+        await self.menu(inbound, transport)
 
 
 llm = MetaLLM()
 locale = LOCALES[settings.locale]
 book = QuotaBook(SessionFactory)
+logger = ExpenseLogger(llm, SessionFactory, locale, book)
+bills = UpcomingBills(SessionFactory, logger, settings.remind_hour)
 message_router = Router(
-    ExpenseLogger(llm, SessionFactory, locale, book),
+    logger,
     MessageReader(llm, locale),
     SpendAssistant(llm, SessionFactory, book, AFFORD_RULES[settings.locale]),
-    PlanManager(SessionFactory, book, locale, llm)
+    PlanManager(SessionFactory, book, locale, llm),
+    bills
 )

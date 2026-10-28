@@ -43,7 +43,7 @@ async def test_welcome_once(sessions):
     await plans.welcome_if_new(msg("text", "hi"), transport)
     await plans.welcome_if_new(msg("text", "hi again"), transport)
     assert len(transport.sent_buttons) == 1
-    assert transport.sent_buttons[0][2] == [("plan:setup", "Set up a plan")]
+    assert transport.sent_buttons[0][2][0] == ("plan:setup", "Set up a plan")
 
 
 # set up saves the plan and income and shows weekly shares before saving

@@ -19,7 +19,7 @@ from splitledger.llm.schemas import Category
 from splitledger.plans import afford
 from splitledger.plans.afford import Ask, Means, Rule, Spending, assess, to_cents
 from splitledger.plans.quota import QuotaBook
-from splitledger.plans.upcoming import EVERY, due_days, outlook
+from splitledger.plans.upcoming import EVERY, open_days, outlook
 
 LOG = logging.getLogger(__name__)
 PROMPT = (Path(__file__).parents[1] / "llm" / "prompts" / "assistant.md").read_text(
@@ -35,8 +35,6 @@ CHECKING = "Checking your spending…"
 NOTHING_YET = "You haven't logged anything yet. Try something like coffee 4.50 first"
 UNAVAILABLE = "I couldn't work that out just now. Please try again in a minute"
 DISCLAIMER = "_A rule of thumb, not financial advice._"
-UNDONE = "Removed *{}* from your upcoming bills."
-ALREADY = "That was already removed."
 # days ahead to look for the next time a plan is due
 NEXT_DAYS = 400
 DAYS = {"type": "string", "description": "local calendar day as YYYY-MM-DD"}
@@ -70,7 +68,8 @@ UPCOMING = {
         "amount": AMOUNT,
         "every": {"type": "string", "enum": list(EVERY)},
         "on": {**DAYS, "description": "the next local day it is due"},
-        "category": CATEGORY
+        "category": CATEGORY,
+        "remind": {"type": "boolean", "description": "true only if they asked for a reminder"}
     },
     "required": ["label", "amount", "every", "on"]
 }
@@ -134,8 +133,8 @@ class SpendTools:
         self._zone = zone
         self._book = book
         self._rules = rules
-        # plans saved during this answer, so one tap can undo them
-        self.added: list[uuid.UUID] = []
+        # plans saved during this answer and whether each has a reminder, for the buttons
+        self.added: list[tuple[uuid.UUID, bool]] = []
 
     # the tools with their argument schemas
     def tools(self) -> list[Tool]:
@@ -255,11 +254,12 @@ class SpendTools:
                 return {"error": "unknown user"}
             plan = PlannedSpend(
                 id=uuid.uuid4(), user_id=user.id, label=label, amount_cents=amount,
-                currency=user.currency, category=category_arg(args), every=every, due_on=on
+                currency=user.currency, category=category_arg(args), every=every, due_on=on,
+                remind=args.get("remind") is True
             )
             session.add(plan)
             await session.commit()
-        self.added.append(plan.id)
+        self.added.append((plan.id, plan.remind))
         saved = money(amount, plan.currency)
         return {"saved": label, "amount": saved, "every": every, "on": on.isoformat()}
 
@@ -271,7 +271,7 @@ class SpendTools:
         ahead = outlook(plans, today)
         items = []
         for plan in plans:
-            days = due_days(plan.every, plan.due_on, today, today + timedelta(days=NEXT_DAYS))
+            days = open_days(plan, today, today + timedelta(days=NEXT_DAYS))
             if days:
                 items.append({
                     "what": plan.label, "amount": money(plan.amount_cents, currency),
@@ -449,30 +449,10 @@ class SpendAssistant:
         if "can_afford" in result.calls and DISCLAIMER not in reply:
             reply = f"{reply}\n\n{DISCLAIMER}"
         if spend.added:
-            undo = "upcoming:undo:" + ",".join(str(key) for key in spend.added)
-            await transport.send_buttons(inbound.user_id, reply, [(undo, "Undo")])
+            keys = ",".join(str(key) for key, _ in spend.added)
+            buttons = [(f"bills:undo:{keys}", "Undo")]
+            if not all(remind for _, remind in spend.added):
+                buttons.append((f"bills:remind:{keys}", "Remind me"))
+            await transport.send_buttons(inbound.user_id, reply, buttons)
             return
         await transport.send_text(inbound.user_id, reply)
-
-    # void plans saved by the last answer, only the user's own
-    async def undo_upcoming(self, inbound: Inbound, keys: str, transport: Transport) -> None:
-        try:
-            ids = [uuid.UUID(key) for key in keys.split(",")]
-        except ValueError:
-            ids = []
-        owner = select(User.id).where(User.wa_user_id == inbound.user_id).scalar_subquery()
-        query = (
-            update(PlannedSpend)
-            .where(
-                PlannedSpend.id.in_(ids),
-                PlannedSpend.user_id == owner,
-                PlannedSpend.voided_at.is_(None)
-            )
-            .values(voided_at=func.now())
-            .returning(PlannedSpend.label)
-        )
-        async with self._sessions() as session:
-            removed = list((await session.execute(query)).scalars())
-            await session.commit()
-        text = UNDONE.format(", ".join(removed)) if removed else ALREADY
-        await transport.send_text(inbound.user_id, text)

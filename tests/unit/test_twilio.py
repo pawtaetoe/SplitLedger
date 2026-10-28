@@ -16,7 +16,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.handlers.router import MessageReader, Router
 from splitledger.llm.schemas import GLOBAL
 from splitledger.settings import settings
-from tests.fakes import FakeAssistant, FakeLLM, FakeLogger, FakePlans
+from tests.fakes import FakeAssistant, FakeBills, FakeLLM, FakeLogger, FakePlans
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "twilio"
 TOKEN = "test-token"
@@ -49,7 +49,8 @@ def make_client() -> TestClient:
 # swap in a real twilio transport with in memory dedupe
 def use_twilio_channel(monkeypatch) -> twilio.TwilioTransport:
     transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
-    router = Router(FakeLogger(), MessageReader(FakeLLM(), GLOBAL), FakeAssistant(), FakePlans())
+    reader = MessageReader(FakeLLM(), GLOBAL)
+    router = Router(FakeLogger(), reader, FakeAssistant(), FakePlans(), FakeBills())
     channel = WhatsAppChannel(transport, router)
     seen: set[str] = set()
 

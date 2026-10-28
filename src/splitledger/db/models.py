@@ -79,6 +79,12 @@ class PlannedSpend(Base):
     every: Mapped[str] = mapped_column(sa.String)
     # the day for a one off, the first due day for a repeat
     due_on: Mapped[date] = mapped_column(sa.Date)
+    # message the day before each due day
+    remind: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    # due days up to and including this one are paid
+    paid_through: Mapped[date | None] = mapped_column(sa.Date)
+    # the due day we last sent a reminder for
+    reminded_for: Mapped[date | None] = mapped_column(sa.Date)
     voided_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()

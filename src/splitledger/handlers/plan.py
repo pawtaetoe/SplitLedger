@@ -90,9 +90,8 @@ class PlanManager:
             _, created = await ensure_user(session, inbound.user_id, self._locale)
             await session.commit()
         if created:
-            await transport.send_buttons(
-                inbound.user_id, WELCOME, [("plan:setup", "Set up a plan")]
-            )
+            choices = [("plan:setup", "Set up a plan"), ("menu:open", "See what I can do")]
+            await transport.send_buttons(inbound.user_id, WELCOME, choices)
 
     # true while we are waiting for a typed plan or income reply
     def waiting_for_text(self, wa_user_id: str) -> bool:

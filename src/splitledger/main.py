@@ -1,16 +1,35 @@
+import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from splitledger.channels import twilio, whatsapp
 from splitledger.channels.simulator import dev_router
 from splitledger.channels.twilio import twilio_router
 from splitledger.channels.whatsapp import whatsapp_router
+from splitledger.contracts.transport import Transport
+from splitledger.handlers.router import bills
+from splitledger.jobs.reminders import reminder_loop
 from splitledger.settings import settings
 
 # show our own info logs next to the uvicorn ones
 logging.basicConfig(level=logging.INFO)
-app = FastAPI(title="SplitLedger")
-app.include_router(twilio_router if settings.whatsapp_provider == "twilio" else whatsapp_router)
+TWILIO = settings.whatsapp_provider == "twilio"
+
+
+# bill reminders run beside the webhook for as long as the app is up
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    transport: Transport = twilio.transport if TWILIO else whatsapp.channel.transport
+    task = asyncio.create_task(reminder_loop(bills, transport))
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="SplitLedger", lifespan=lifespan)
+app.include_router(twilio_router if TWILIO else whatsapp_router)
 if settings.env == "dev":
     app.include_router(dev_router)
 

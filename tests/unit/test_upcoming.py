@@ -1,7 +1,7 @@
 from datetime import date
 
 from splitledger.db.models import PlannedSpend
-from splitledger.plans.upcoming import Due, add_months, due_days, outlook, per_month
+from splitledger.plans.upcoming import Due, add_months, due_days, open_days, outlook, per_month
 
 TODAY = date(2026, 10, 28)
 
@@ -58,3 +58,11 @@ def test_outlook():
     assert ahead.due_total() == 57000
     assert ahead.later == [Due("present", 15000, date(2026, 12, 3))]
     assert ahead.monthly == 5000 + 8666 + 120000
+
+
+# paid due days drop out of the window and out of what is still to pay
+def test_paid_days_drop_out():
+    phone = planned("phone", 5000, "month", date(2026, 9, 30))
+    phone.paid_through = date(2026, 10, 30)
+    assert open_days(phone, TODAY, date(2026, 12, 1)) == [date(2026, 11, 30)]
+    assert outlook([phone], TODAY).this_month == []

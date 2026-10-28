@@ -39,6 +39,13 @@ def due_days(every: str, first: date, start: date, end: date) -> list[date]:
     return days
 
 
+# due days of one plan in a window that are not paid yet
+def open_days(plan: PlannedSpend, start: date, end: date) -> list[date]:
+    paid = plan.paid_through
+    days = due_days(plan.every, plan.due_on, start, end)
+    return [day for day in days if paid is None or day > paid]
+
+
 # what a repeating plan costs in a usual month, a one off costs nothing there
 def per_month(every: str, cents: int) -> int:
     return {"week": cents * 52 // 12, "month": cents, "year": cents // 12}.get(every, 0)
@@ -74,12 +81,12 @@ def outlook(plans: Iterable[PlannedSpend], today: date) -> Outlook:
     for plan in plans:
         this_month += [
             Due(plan.label, plan.amount_cents, day)
-            for day in due_days(plan.every, plan.due_on, today, month_end)
+            for day in open_days(plan, today, month_end)
         ]
         if plan.every == "once":
             later += [
                 Due(plan.label, plan.amount_cents, day)
-                for day in due_days("once", plan.due_on, month_end, horizon)
+                for day in open_days(plan, month_end, horizon)
             ]
         monthly += per_month(plan.every, plan.amount_cents)
     return Outlook(

@@ -131,13 +131,14 @@ async def test_afford_caveat_and_pay(sessions):
         assert stored.scalar_one() == 450000
 
 
-# plans are saved, listed with what is due, counted when affording and undone in one tap
+# plans are saved, listed with what is due, counted when affording and removed by name
 async def test_upcoming_round_trip(sessions):
     me = await seed(sessions)
     tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)
     today = datetime.now(SG).date().isoformat()
-    rent = {"label": "rent", "amount": 1200, "every": "month", "on": today}
+    rent = {"label": "rent", "amount": 1200, "every": "month", "on": today, "remind": True}
     assert (await tools.add_upcoming(rent))["amount"] == "SGD 1200.00"
+    assert tools.added[0][1] is True
     listed = await tools.list_upcoming({})
     assert listed["upcoming"][0]["what"] == "rent"
     assert listed["still_to_pay_this_month"] == "SGD 1200.00"
@@ -147,9 +148,5 @@ async def test_upcoming_round_trip(sessions):
     with pytest.raises(ValueError):
         await tools.add_upcoming(past)
     assert (await tools.remove_upcoming({"label": "gym"}))["upcoming"] == ["rent"]
-    transport = FakeTransport()
-    assistant = SpendAssistant(FakeLLM(), sessions, QuotaBook(sessions), CORE_RULES)
-    keys = ",".join(str(key) for key in tools.added)
-    await assistant.undo_upcoming(Inbound("m2", ME, "button"), keys, transport)
-    assert transport.sent_text[-1][1] == ask.UNDONE.format("rent")
+    assert (await tools.remove_upcoming({"label": "RENT"}))["removed"] == ["rent"]
     assert (await tools.list_upcoming({}))["upcoming"] == []
