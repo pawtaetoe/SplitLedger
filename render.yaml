@@ -7,6 +7,7 @@ services:
     plan: starter
     healthCheckPath: /healthz
     autoDeploy: true
+    region: singapore 
     envVars:
       - key: DATABASE_URL
         fromDatabase:
