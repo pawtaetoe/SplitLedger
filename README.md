@@ -145,9 +145,3 @@ numbers with no pack of their own. The core works in any currency.
 | Google Wallet budget card | A pass showing what is left this week, refreshed after every log |
 | More region packs | India (UPI), Malaysia (DuitNow), Thailand (PromptPay), Brazil (Pix), on the same QR encoder |
 | Auto-import | Spending appears without typing, through bank open-banking APIs |
-
-## Built during the hackathon
-
-The first commit is `15c5adb` on 2026-10-27. Third party, not ours: Meta Muse Spark and Muse
-Voice Transcribe, WhatsApp and Twilio, FastAPI, SQLAlchemy, Postgres, HTMX. Everything else in
-`src/`, `tests/` and `scripts/` was written for this hackathon.
