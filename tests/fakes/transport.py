@@ -8,6 +8,7 @@ class FakeTransport:
         self.fetched: list[str] = []
         self.media: dict[str, bytes] = {}
         self.sent: list[tuple[str, str]] = []
+        self.sent_links: list[tuple[str, str, str, str]] = []
 
     # record one text
     async def send_text(self, to: str, text: str) -> None:
@@ -19,6 +20,11 @@ class FakeTransport:
         self, to: str, text: str, buttons: list[tuple[str, str]]
     ) -> None:
         self.sent_buttons.append((to, text, buttons))
+        self.sent.append((to, text))
+
+    # record one link button
+    async def send_link(self, to: str, text: str, label: str, url: str) -> None:
+        self.sent_links.append((to, text, label, url))
         self.sent.append((to, text))
 
     # record one image

@@ -16,18 +16,23 @@ COOKIE = "sl_me"
 COOKIE_DAYS = 30
 BILL_DAYS = 14
 BILL_LINK = (
-    "*Your link to the bill*\n{}\n\n"
-    "Tick what you had, then tap Confirm. Your share goes into your own records.\n"
-    "_The link is yours and works for 14 days. Please don't forward it._\n"
-    "Send _menu_ any time to see what else I can do."
+    "*Your page for this bill*\n"
+    "Tick what you had. It saves as you go, and your share goes into your own records.\n"
+    "_The button is yours and works for 14 days. Please don't forward it._"
 )
-WARNING = "_The link works for 15 minutes. Please don't forward it._"
-# added under messages that lead to the dashboard
-SEE_ALL = "See it all on one page:\n{}"
-# what each page is called and what it is for
+WARNING = "_The button works for 15 minutes. Please don't forward it._"
+# the label on buttons that open the dashboard
+SEE_ALL = "See it all"
+# what each page is called, what it is for and its button
 PAGES = {
-    "me": ("Your dashboard", "Who owes whom, open bills, this month and what's coming up."),
-    "plan": ("Set up your plan", "Every choice on one screen, with the amounts as you go.")
+    "me": (
+        "Your dashboard", "Who owes whom, open bills, this month and what's coming up.",
+        "Open dashboard"
+    ),
+    "plan": (
+        "Set up your plan", "Every choice on one screen, with the amounts as you go.",
+        "Open the plan"
+    )
 }
 
 
@@ -59,13 +64,13 @@ class DashboardLink:
             user_id, _ = await ensure_user(session, inbound.user_id, self._locale)
             await session.commit()
         token = self._links.make(str(user_id), datetime.now(UTC))
-        title, what = PAGES[page]
+        title, what, label = PAGES[page]
         url = f"{self._base_url}/d/{token}" + ("" if page == "me" else f"?to={page}")
-        await transport.send_text(inbound.user_id, f"*{title}*\n{url}\n\n{what}\n{WARNING}")
+        await transport.send_link(inbound.user_id, f"*{title}*\n{what}\n{WARNING}", label, url)
 
-    # the see it all line for this user, to add under a message
-    def see_all(self, user_id: uuid.UUID) -> str:
-        return SEE_ALL.format(dashboard_url(self._base_url, self._links, user_id))
+    # a short lived link to this user's dashboard
+    def url(self, user_id: uuid.UUID) -> str:
+        return dashboard_url(self._base_url, self._links, user_id)
 
     # a personal link that opens one bill as this user for two weeks
     async def bill_url(self, inbound: Inbound, code: str) -> str:
@@ -78,4 +83,4 @@ class DashboardLink:
     # the personal bill link on its own
     async def send_bill(self, inbound: Inbound, transport: Transport, code: str) -> None:
         url = await self.bill_url(inbound, code)
-        await transport.send_text(inbound.user_id, BILL_LINK.format(url))
+        await transport.send_link(inbound.user_id, BILL_LINK, "Open the bill", url)

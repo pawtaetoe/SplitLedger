@@ -32,9 +32,10 @@ async def test_fix_link(sessions):
         bill = (await session.execute(select(Bill))).scalar_one()
     tap = Inbound("m2", ME, "button", button_id=f"bill:edit:{bill.code}")
     await group.on_button(tap, tap.button_id or "", transport)
-    text = transport.sent_text[-1][1]
-    assert text.startswith(f"*Fix the items*\nhttps://sl.test/e/{bill.code}/")
-    token = text.split(f"/e/{bill.code}/")[1].split("\n")[0]
+    to, text, label, url = transport.sent_links[-1]
+    assert (to, text, label) == (ME, bill_module.FIX_LINK, "Fix the items")
+    assert url.startswith(f"https://sl.test/e/{bill.code}/")
+    token = url.split(f"/e/{bill.code}/")[1]
     links = bill_module.edit_links(ClaimTokens("secret"), bill.code)
     assert links.read(token, datetime.now(UTC)) == str(bill.payer_id)
 

@@ -228,3 +228,53 @@ async def test_media_route_detects_jpeg(monkeypatch):
     link = parse_qs(route.calls.last.request.content.decode())["MediaUrl"][0]
     served = make_client().get(link.removeprefix(BASE))
     assert served.headers["content-type"] == "image/jpeg"
+
+
+# a link on this app goes through one call to action template, its path squeezed into /l/
+@respx.mock
+async def test_send_link_button(monkeypatch):
+    monkeypatch.setattr(settings, "public_base_url", BASE)
+    respx.get(CONTENT_URL).mock(return_value=httpx.Response(200, json={"contents": []}))
+    created = respx.post(CONTENT_URL).mock(return_value=httpx.Response(201, json={"sid": "HX9"}))
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(201, json={}))
+    transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
+    url = f"{BASE}/e/K7Q2AB/t.1.s"
+    await transport.send_link("6581234567", "*Fix the items*", "Fix the items", url)
+    sent = parse_qs(route.calls.last.request.content.decode())
+    assert sent["ContentSid"] == ["HX9"]
+    values = json.loads(sent["ContentVariables"][0])
+    assert values == {"1": "*Fix the items*", "2": "e~K7Q2AB~t.1.s"}
+    action = json.loads(created.calls.last.request.content)["types"]["twilio/call-to-action"]
+    button = {"type": "URL", "title": "Fix the items", "url": f"{BASE}/l/{{{{2}}}}"}
+    assert action["actions"][0] == button
+
+
+# when the template can't be made the url is sent as text
+@respx.mock
+async def test_send_link_falls_back(monkeypatch):
+    monkeypatch.setattr(settings, "public_base_url", BASE)
+    respx.get(CONTENT_URL).mock(return_value=httpx.Response(500))
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(201, json={}))
+    transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
+    await transport.send_link("6581234567", "Hi", "Open", f"{BASE}/d/t")
+    assert parse_qs(route.calls.last.request.content.decode())["Body"] == [f"Hi\n{BASE}/d/t"]
+
+
+# four to ten choices go out as one tap list with ids and descriptions
+@respx.mock
+async def test_list_picker():
+    respx.get(CONTENT_URL).mock(return_value=httpx.Response(200, json={"contents": []}))
+    created = respx.post(CONTENT_URL).mock(return_value=httpx.Response(201, json={"sid": "HX5"}))
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(201, json={}))
+    transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
+    choices = [("a", "One — first"), ("b", "Two"), ("c", "Three"), ("d", "Four")]
+    await transport.send_buttons("6581234567", "Pick", choices)
+    sent = parse_qs(route.calls.last.request.content.decode())
+    assert sent["ContentSid"] == ["HX5"]
+    values = json.loads(sent["ContentVariables"][0])
+    assert (values["1"], values["2"], values["3"], values["4"]) == ("Pick", "One", "a", "first")
+    assert (values["5"], values["6"], values["7"]) == ("Two", "b", "Two")
+    template = json.loads(created.calls.last.request.content)
+    picker = template["types"]["twilio/list-picker"]
+    assert picker["items"][1] == {"item": "{{5}}", "id": "{{6}}", "description": "{{7}}"}
+    assert template["friendly_name"] == "splitledger_list_4"

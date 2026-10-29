@@ -68,6 +68,19 @@ def test_sign_in_pages(monkeypatch):
 
 
 
+# a link button lands on its page with the query kept, anything else goes to the dashboard
+def test_link_buttons():
+    app = FastAPI()
+    app.include_router(dashboard_router)
+    web = TestClient(app)
+    went = web.get("/l/e~K7Q2AB~t.1.s", follow_redirects=False)
+    assert went.status_code == 303 and went.headers["location"] == "/e/K7Q2AB/t.1.s"
+    plan = web.get("/l/d~t.1.s?to=plan", follow_redirects=False)
+    assert plan.headers["location"] == "/d/t.1.s?to=plan"
+    for bad in ["x~evil", "~~evil.example", "d~~evil.example"]:
+        assert web.get(f"/l/{bad}", follow_redirects=False).headers["location"] == "/me"
+
+
 # a bill link opens only its own bill for two weeks, never the dashboard
 def test_bill_links_are_scoped():
     tokens = ClaimTokens("secret")

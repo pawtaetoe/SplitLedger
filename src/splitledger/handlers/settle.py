@@ -63,13 +63,12 @@ class SettleUp:
     # the you owe message with how to pay and an i've paid button, then the qr if there is one
     async def ask(
         self, transport: Transport, debtor: User, creditor: User, currency: str, header: str,
-        share: int, reference: str, footer: str = ""
+        share: int, reference: str
     ) -> None:
         async with self._sessions() as session:
             cents = await self.owing(session, debtor.id, creditor.id, currency)
-        end = f"\n\n{footer}" if footer else ""
         if cents <= 0:
-            await transport.send_buttons(debtor.wa_user_id, header + end, [OWE_ALL])
+            await transport.send_buttons(debtor.wa_user_id, header, [OWE_ALL])
             return
         offer = self._rails.offer(creditor.wa_user_id, cents, currency, reference)
         text = header
@@ -79,7 +78,7 @@ class SettleUp:
             caption = f"PayNow QR · {money(cents, currency)} to {name_of(creditor)}"
             await transport.send_image(debtor.wa_user_id, offer.qr, caption)
         buttons = [paid_button(creditor.id, currency), OWE_ALL]
-        await transport.send_buttons(debtor.wa_user_id, f"{text}\n\n{offer.text}{end}", buttons)
+        await transport.send_buttons(debtor.wa_user_id, f"{text}\n\n{offer.text}", buttons)
 
     # pay:done:<person>:<currency> from the debtor or pay:undo:<row> from the person paid
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:

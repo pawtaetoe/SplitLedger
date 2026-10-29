@@ -55,9 +55,9 @@ FIX_FIRST = (
     "then I'll make the message for your friends."
 )
 FIX_LINK = (
-    "*Fix the items*\n{}\n\n"
+    "*Fix the items*\n"
     "Change names or prices, add or remove lines, then tap Save. "
-    "The link works for an hour."
+    "The button works for an hour."
 )
 EDIT_MINUTES = 60
 READY_EVEN = (
@@ -69,8 +69,10 @@ UNKNOWN = "*I can't find that bill*\nSend a new receipt photo with the caption _
 NOT_PAYER = "*Only the person who paid can change this bill*"
 HOW = "*How should I split {}?*\n{}"
 HOW_ITEMS = "By what each had lets friends tick their own dishes."
-HOW_EVEN_ONLY = "The lines don't add up, so I can only split it evenly."
-HOW_MANY = "*How many people, counting you?*\nReply like _split 4 ways_."
+HOW_EVEN_ONLY = "The lines don't add up. Fix the items to split by dish, or split it evenly."
+HOW_MANY = "*How many people, counting you?*\nMore than 8? Reply like _split 12 ways_."
+# head counts offered as buttons
+HEADS = range(2, 9)
 CLOSED_ALREADY = "*This bill is closed already*"
 NOTHING_OPEN = (
     "*No open bill to close*\nSplit one first: send a receipt photo with the caption _split_."
@@ -322,14 +324,16 @@ class GroupBills:
             return
         token = edit_links(self._tokens, bill.code).make(str(bill.payer_id), datetime.now(UTC))
         url = f"{self._base_url}/e/{bill.code}/{token}"
-        await transport.send_text(inbound.user_id, FIX_LINK.format(url))
+        await transport.send_link(inbound.user_id, FIX_LINK, "Fix the items", url)
 
     # how to split, by item only when the lines add up, evenly with the head count if known
     async def _ask_how(
         self, inbound: Inbound, transport: Transport, bill: Bill, ways: int | None,
         by_item: bool
     ) -> None:
-        buttons = [(f"bill:items:{bill.code}", "By what each had")] if by_item else []
+        buttons = [(f"bill:items:{bill.code}", "By what each had")] if by_item else [
+            edit_button(bill)
+        ]
         even = f"Evenly, {ways} ways" if ways else "Evenly"
         buttons.append((f"bill:even:{bill.code}:{ways or 0}", even))
         text = HOW.format(money(bill.total, bill.currency), HOW_ITEMS if by_item else HOW_EVEN_ONLY)
@@ -343,7 +347,8 @@ class GroupBills:
             await transport.send_text(inbound.user_id, CLOSED_ALREADY)
             return
         if action == "even" and not (choice.isdigit() and 2 <= int(choice) <= MAX_WAYS):
-            await transport.send_text(inbound.user_id, HOW_MANY)
+            buttons = [(f"bill:even:{bill.code}:{n}", f"{n} people") for n in HEADS]
+            await transport.send_buttons(inbound.user_id, HOW_MANY, buttons)
             return
         async with self._sessions() as session:
             fresh = await session.get(Bill, bill.id)
@@ -519,7 +524,8 @@ class GroupBills:
         )
         if owed:
             text += "\n\n*Owed to you*\n" + "\n".join(owed)
-        await transport.send_text(payer_wa, f"{text}\n\n{self._see_all(bill.payer_id)}")
+        me = dashboard_url(self._base_url, self._me, bill.payer_id)
+        await transport.send_link(payer_wa, text, SEE_ALL, me)
         friends = [s.person.user_id for s in closing.shares if s.person.user_id and s.cents]
         async with self._sessions() as session:
             users = {
@@ -535,21 +541,15 @@ class GroupBills:
                 continue
             amount = money(share.cents, c)
             text = OWED_TO_FRIEND.format(closing.payer.guest_name, amount, what, category)
-            footer = self._see_all(user.id)
             try:
                 if self._settle is not None and payer is not None:
                     await self._settle.ask(
-                        transport, user, payer, c, text, share.cents, f"SplitLedger {bill.code}",
-                        footer
+                        transport, user, payer, c, text, share.cents, f"SplitLedger {bill.code}"
                     )
                 else:
-                    await transport.send_buttons(user.wa_user_id, f"{text}\n\n{footer}", [OWE_ALL])
+                    await transport.send_buttons(user.wa_user_id, text, [OWE_ALL])
             except Exception as error:
                 LOG.warning("owed message failed with %s", type(error).__name__)
-
-    # the see it all line with a sign in link for one user
-    def _see_all(self, user_id: uuid.UUID) -> str:
-        return SEE_ALL.format(dashboard_url(self._base_url, self._me, user_id))
 
     # save the bill, its items and the payer as the first participant, retrying a code clash
     async def _create(

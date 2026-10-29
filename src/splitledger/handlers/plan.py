@@ -12,7 +12,7 @@ from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import BudgetPlan, User
-from splitledger.handlers.dashboard import DashboardLink
+from splitledger.handlers.dashboard import SEE_ALL, DashboardLink
 from splitledger.handlers.log import ensure_user, money
 from splitledger.llm.schemas import CustomPlan, Locale
 from splitledger.plans.custom import check_plan, fits_income
@@ -320,9 +320,10 @@ class PlanManager:
             await session.commit()
         self._drafts.pop(inbound.user_id, None)
         text = "✅ *Plan saved*\nEach time you log, I'll show what's left."
-        if self._links is not None:
-            text += "\n\n" + self._links.see_all(user_id)
-        await transport.send_text(inbound.user_id, text)
+        if self._links is None:
+            await transport.send_text(inbound.user_id, text)
+            return
+        await transport.send_link(inbound.user_id, text, SEE_ALL, self._links.url(user_id))
 
     # delete the plan, spending records are untouched
     async def _remove(self, inbound: Inbound, transport: Transport) -> None:

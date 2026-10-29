@@ -46,6 +46,14 @@ function render(messages) {
     } else {
       div.textContent = message.text || message.caption || message.kind;
     }
+    if (message.kind === "link") {
+      const a = document.createElement("a");
+      a.href = message.url;
+      a.target = "_blank";
+      a.textContent = message.label;
+      a.className = "link";
+      div.appendChild(a);
+    }
     if (message.buttons) {
       for (const button of message.buttons) {
         const el = document.createElement("button");

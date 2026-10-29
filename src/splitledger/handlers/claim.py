@@ -198,14 +198,18 @@ class ClaimChat:
             f"{title}\n" + "\n".join(lines)
             + "\n\n*Reply with the numbers you had*, like _2, 6_.\n"
             "Shared a dish? Pick its number too, then tap I shared it."
-            + (f"\n\nOr tick them on a page:\n{link}" if link else "")
         )
         free = [(n, line) for n, line in enumerate(view.lines, 1) if not line.holders]
         buttons = [(f"claim:pick:{bill.code}:{n}", f"{n}. {line.name}"[:24]) for n, line in free]
-        if not buttons or len(buttons) > MAX_CHOICES:
-            await transport.send_text(inbound.user_id, text)
+        if buttons and len(buttons) <= MAX_CHOICES:
+            # a message has either reply buttons or a link button, so the link stays in the text
+            page = f"\n\nOr tick them on a page:\n{link}" if link else ""
+            await transport.send_buttons(inbound.user_id, text + page, buttons)
             return
-        await transport.send_buttons(inbound.user_id, text, buttons)
+        if link:
+            await transport.send_link(inbound.user_id, text, "Tick on a page", link)
+            return
+        await transport.send_text(inbound.user_id, text)
 
     # claim items by number, taken ones get a share button
     async def _claim_numbers(

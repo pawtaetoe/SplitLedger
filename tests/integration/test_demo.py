@@ -118,10 +118,10 @@ async def test_demo(sessions):
     assert await group.nudge(transport, now + timedelta(minutes=16)) == 1
     closed = last(transport, TOMMY)
     assert "- Anna *SGD 10.00*" in closed and "- Ben *SGD 20.00*" in closed
-    assert "See it all on one page:\nhttps://sl.test/d/" in closed
+    to, _, label, url = transport.sent_links[-1]
+    assert (to, label) == (TOMMY, "See it all") and url.startswith("https://sl.test/d/")
     assert last(transport, ANNA).startswith("*You owe Tommy SGD 10.00*")
     assert "*PayNow* to 8123 4567" in last(transport, ANNA)
-    assert "See it all on one page:\nhttps://sl.test/d/" in last(transport, ANNA)
     assert any(to == ANNA for to, _, _ in transport.sent_images)
 
     # 6, the button under you owe lists everything without the model

@@ -19,6 +19,8 @@ from splitledger.split.overview import Overview
 from splitledger.split.tokens import ClaimTokens, LoginLinks
 from splitledger.web.claim import render
 
+# pages a link button may open, the first part of the path
+LINK_PAGES = frozenset({"b", "c", "d", "e"})
 # the dashboard tabs, key and label
 TABS = {"overview": "Overview", "bills": "Bills", "spending": "Spending", "coming": "Coming up"}
 EXPIRED = (
@@ -137,6 +139,16 @@ dashboard_page = DashboardPage(
     settings.whatsapp_bot_number or re.sub(r"\D", "", settings.twilio_whatsapp_from)
 )
 dashboard_router = APIRouter()
+
+
+# a link button from the chat, its path has ~ for / so it fits one template variable
+@dashboard_router.get("/l/{key}")
+async def link(key: str, request: Request) -> Response:
+    path = key.replace("~", "/")
+    if path.split("/", 1)[0] not in LINK_PAGES or "//" in path or "\\" in path:
+        return RedirectResponse("/me", 303)
+    query = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"/{path}{query}", 303)
 
 
 # the link from the chat

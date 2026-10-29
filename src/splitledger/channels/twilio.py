@@ -19,6 +19,8 @@ from splitledger.settings import settings
 LOG = logging.getLogger(__name__)
 API_BASE = "https://api.twilio.com/2010-04-01/Accounts"
 CONTENT_URL = "https://content.twilio.com/v1/Content"
+# choices a whatsapp list holds, more are numbered
+MAX_LIST = 10
 
 
 # check a twilio signature against the url and posted params
@@ -63,6 +65,23 @@ def _parse_kind(
     return Inbound(message_id, user_id, "text", text=body)
 
 
+# a numbered template variable
+def var(n: int) -> str:
+    return "{{" + str(n) + "}}"
+
+
+# the content types for a reply button or list template with numbered variables
+def template_types(kind: str, count: int) -> dict[str, object]:
+    if kind == "list":
+        items = [
+            {"item": var(3 * i + 2), "id": var(3 * i + 3), "description": var(3 * i + 4)}
+            for i in range(count)
+        ]
+        return {"twilio/list-picker": {"body": var(1), "button": "Choose", "items": items}}
+    actions = [{"title": var(2 * i + 2), "id": var(2 * i + 3)} for i in range(count)]
+    return {"twilio/quick-reply": {"body": var(1), "actions": actions}}
+
+
 # twilio sandbox transport, buttons become numbered options
 class TwilioTransport:
     # credentials default from settings
@@ -75,7 +94,8 @@ class TwilioTransport:
         self._from = sender or settings.twilio_whatsapp_from
         self._media: dict[str, bytes] = {}
         self._menus: dict[str, dict[str, str]] = {}
-        self._templates: dict[int, str] = {}
+        self._templates: dict[str, str] = {}
+        self._links: dict[str, str] = {}
 
     # post one message form to twilio
     async def _post_message(self, to: str, fields: dict[str, str]) -> None:
@@ -96,12 +116,15 @@ class TwilioTransport:
     async def send_buttons(self, to: str, text: str, buttons: list[tuple[str, str]]) -> None:
         # digits keep working even when real buttons are shown
         self._menus[to] = {str(n): button_id for n, (button_id, _) in enumerate(buttons, 1)}
-        if len(buttons) <= 3:
-            try:
+        try:
+            if len(buttons) <= 3:
                 await self._send_quick_reply(to, with_descriptions(text, buttons), buttons)
                 return
-            except (httpx.HTTPError, RuntimeError, KeyError, ValueError) as error:
-                LOG.warning("twilio buttons failed with %s, sending numbers", type(error).__name__)
+            if len(buttons) <= MAX_LIST:
+                await self._send_list(to, text, buttons)
+                return
+        except (httpx.HTTPError, RuntimeError, KeyError, ValueError) as error:
+            LOG.warning("twilio buttons failed with %s, sending numbers", type(error).__name__)
         await self.send_text(to, numbered(text, buttons))
 
     # real tappable buttons through a reusable content template
@@ -115,11 +138,22 @@ class TwilioTransport:
         sid = await self._template_sid(len(buttons))
         await self._post_message(to, {"ContentSid": sid, "ContentVariables": json.dumps(values)})
 
-    # one quick reply template per button count, found or created once
-    async def _template_sid(self, count: int) -> str:
-        if count in self._templates:
-            return self._templates[count]
-        name = f"splitledger_buttons_{count}"
+    # four to ten choices as a tap list, each with its id and description
+    async def _send_list(self, to: str, body: str, buttons: list[tuple[str, str]]) -> None:
+        values = {"1": body}
+        for index, (button_id, title) in enumerate(buttons):
+            label, description = split_choice(title)
+            values[str(3 * index + 2)] = label[:24]
+            values[str(3 * index + 3)] = button_id
+            values[str(3 * index + 4)] = (description or label)[:72]
+        sid = await self._template_sid(len(buttons), "list")
+        await self._post_message(to, {"ContentSid": sid, "ContentVariables": json.dumps(values)})
+
+    # one template per kind and button count, found or created once
+    async def _template_sid(self, count: int, kind: str = "buttons") -> str:
+        name = f"splitledger_{kind}_{count}"
+        if name in self._templates:
+            return self._templates[name]
         auth = (self._sid, self._token)
         async with httpx.AsyncClient(timeout=10) as client:
             found = await client.get(CONTENT_URL, params={"PageSize": 100}, auth=auth)
@@ -129,19 +163,57 @@ class TwilioTransport:
             if existing:
                 sid = str(existing[0])
             else:
-                actions = [{"title": f"{{{{{2 * i + 2}}}}}", "id": f"{{{{{2 * i + 3}}}}}"}
-                           for i in range(count)]
-                variables = {str(n): f"value {n}" for n in range(1, 2 * count + 2)}
+                content = {
+                    "friendly_name": name, "language": "en", "types": template_types(kind, count)
+                }
+                width = 3 if kind == "list" else 2
+                content["variables"] = {str(n): f"value {n}" for n in range(1, width * count + 2)}
+                created = await client.post(CONTENT_URL, json=content, auth=auth)
+                created.raise_for_status()
+                sid = str(created.json()["sid"])
+        self._templates[name] = sid
+        return sid
+
+    # text with one link button, the address goes through /l/ so its variable has no slashes
+    async def send_link(self, to: str, text: str, label: str, url: str) -> None:
+        base = settings.public_base_url.rstrip("/")
+        key = url.removeprefix(base + "/").replace("/", "~")
+        try:
+            if not url.startswith(base + "/"):
+                raise ValueError("link is not on this app")
+            sid = await self._link_sid(label[:20], base)
+            values = json.dumps({"1": text, "2": key})
+            await self._post_message(to, {"ContentSid": sid, "ContentVariables": values})
+        except (httpx.HTTPError, RuntimeError, KeyError, ValueError) as error:
+            LOG.warning("twilio link button failed with %s, sending the url", type(error).__name__)
+            await self.send_text(to, f"{text}\n{url}")
+
+    # one call to action template per button label and app address, found or created once
+    async def _link_sid(self, label: str, base: str) -> str:
+        digest = hashlib.sha256(f"{label}|{base}".encode()).hexdigest()[:10]
+        name = f"splitledger_link_{digest}"
+        if name in self._links:
+            return self._links[name]
+        auth = (self._sid, self._token)
+        async with httpx.AsyncClient(timeout=10) as client:
+            found = await client.get(CONTENT_URL, params={"PageSize": 100}, auth=auth)
+            found.raise_for_status()
+            existing = [c["sid"] for c in found.json().get("contents", [])
+                        if c.get("friendly_name") == name]
+            if existing:
+                sid = str(existing[0])
+            else:
+                action = {"type": "URL", "title": label, "url": f"{base}/l/{{{{2}}}}"}
                 content = {
                     "friendly_name": name,
                     "language": "en",
-                    "variables": variables,
-                    "types": {"twilio/quick-reply": {"body": "{{1}}", "actions": actions}}
+                    "variables": {"1": "body", "2": "d~sample"},
+                    "types": {"twilio/call-to-action": {"body": "{{1}}", "actions": [action]}}
                 }
                 created = await client.post(CONTENT_URL, json=content, auth=auth)
                 created.raise_for_status()
                 sid = str(created.json()["sid"])
-        self._templates[count] = sid
+        self._links[name] = sid
         return sid
 
     # keep the image and send twilio a public link to it

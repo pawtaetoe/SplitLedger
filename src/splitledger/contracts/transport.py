@@ -11,6 +11,9 @@ class Transport(Protocol):
         self, to: str, text: str, buttons: list[tuple[str, str]]
     ) -> None: ...
 
+    # send text with one button that opens a link, so long urls stay out of the chat
+    async def send_link(self, to: str, text: str, label: str, url: str) -> None: ...
+
     # send one image with optional caption
     async def send_image(self, to: str, png: bytes, caption: str | None = None) -> None: ...
 

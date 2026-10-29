@@ -126,3 +126,18 @@ async def test_send_text_surfaces_graph_error():
     transport = whatsapp.WhatsAppTransport(access_token="token", phone_number_id="999")
     with pytest.raises(RuntimeError, match="131030"):
         await transport.send_text("6581234567", "hello")
+
+
+# a link becomes one button that opens it
+@respx.mock
+async def test_send_link_is_a_button():
+    route = respx.post("https://graph.facebook.com/v21.0/999/messages").mock(
+        return_value=httpx.Response(200, json={"messages": [{"id": "wamid.out"}]})
+    )
+    transport = whatsapp.WhatsAppTransport(access_token="token", phone_number_id="999")
+    await transport.send_link("6581234567", "*Your dashboard*", "Open dashboard", "https://x/d/t")
+    interactive = json.loads(route.calls.last.request.content)["interactive"]
+    assert interactive["type"] == "cta_url"
+    assert interactive["action"]["parameters"] == {
+        "display_text": "Open dashboard", "url": "https://x/d/t"
+    }

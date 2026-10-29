@@ -44,6 +44,10 @@ class SimulatorTransport:
         body = with_descriptions(text, buttons)
         self.sent.append({"kind": "buttons", "to": to, "text": body, "buttons": shown})
 
+    # record one link button
+    async def send_link(self, to: str, text: str, label: str, url: str) -> None:
+        self.sent.append({"kind": "link", "to": to, "text": text, "label": label, "url": url})
+
     # record one image and keep its bytes fetchable
     async def send_image(self, to: str, png: bytes, caption: str | None = None) -> None:
         ref = uuid.uuid4().hex

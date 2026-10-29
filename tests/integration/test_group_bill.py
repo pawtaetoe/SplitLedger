@@ -139,7 +139,12 @@ async def test_unsure_even_only(sessions):
     await group.from_receipt(PHOTO, transport, None, unsure=True)
     _, ask, buttons = transport.sent_buttons[-1]
     assert ask.endswith(bill_module.HOW_EVEN_ONLY)
-    assert [title for _, title in buttons] == ["Evenly"]
-    even = buttons[0][0]
+    assert [title for _, title in buttons] == ["Fix the items", "Evenly"]
+    even = buttons[1][0]
     await group.on_button(Inbound("m2", ME, "button", button_id=even), even, transport)
-    assert transport.sent_text[-1][1] == bill_module.HOW_MANY
+    _, ask, heads = transport.sent_buttons[-1]
+    assert ask == bill_module.HOW_MANY
+    assert [title for _, title in heads] == [f"{n} people" for n in range(2, 9)]
+    three = heads[1][0]
+    await group.on_button(Inbound("m3", ME, "button", button_id=three), three, transport)
+    assert "Split evenly 3 ways" in transport.sent_text[-1][1]

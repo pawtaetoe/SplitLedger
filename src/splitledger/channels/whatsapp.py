@@ -129,6 +129,20 @@ class WhatsAppTransport:
         }
         await self._post_message(payload)
 
+    # send text with one link button, meta allows it inside the 24 hour window
+    async def send_link(self, to: str, text: str, label: str, url: str) -> None:
+        action = {"name": "cta_url", "parameters": {"display_text": label[:20], "url": url}}
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "interactive",
+            "interactive": {"type": "cta_url", "body": {"text": text}, "action": action}
+        }
+        try:
+            await self._post_message(payload)
+        except (httpx.HTTPError, RuntimeError):
+            await self.send_text(to, f"{text}\n{url}")
+
     # upload then send one image
     async def send_image(self, to: str, png: bytes, caption: str | None = None) -> None:
         async with httpx.AsyncClient(timeout=10) as client:
