@@ -349,3 +349,15 @@ async def test_owe_all_button():
     llm = FakeLLM()
     await build(llm, assistant=assistant).handle(button("owe:all"), FakeTransport())
     assert assistant.asked == ["owed"] and llm.structured_calls == []
+
+
+# the menu choice, a tap and typing currency go to the currency handler without the model
+async def test_currency_routes():
+    currency = fakes.FakeCurrency()
+    llm = FakeLLM()
+    router = build(llm, currency=currency)
+    await router.handle(button("menu:currency"), FakeTransport())
+    await router.handle(button("cur:EUR"), FakeTransport())
+    await router.handle(text("currency jpy"), FakeTransport())
+    assert currency.calls == ["ask", "button cur:EUR", "typed currency jpy"]
+    assert llm.structured_calls == []

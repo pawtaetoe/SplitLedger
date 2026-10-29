@@ -16,7 +16,7 @@ services:
       - key: ENV
         value: prod
       - key: LOCALE
-        value: sg
+        value: global
       - key: WHATSAPP_PROVIDER
         value: twilio
       - key: APP_SECRET

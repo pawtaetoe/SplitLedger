@@ -15,7 +15,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerEntry, LedgerKind, PlannedSpend, User
 from splitledger.handlers.log import money
-from splitledger.llm.schemas import Category
+from splitledger.llm.schemas import Category, by_country_code
 from splitledger.plans import afford
 from splitledger.plans.afford import Ask, Means, Rule, Spending, assess, to_cents
 from splitledger.plans.quota import QuotaBook
@@ -419,15 +419,17 @@ class SpendTools:
 
 # answers spending questions with the model calling read only tools
 class SpendAssistant:
-    # model for the tool loop, sessions, the quota book and the affordability rules in use
+    # model for the tool loop, sessions, the quota book and the affordability rules in use,
+    # packs swap in a region's rules by the country calling code of the user's number
     def __init__(
         self, llm: LLM, sessions: async_sessionmaker[AsyncSession], book: QuotaBook,
-        rules: list[Rule]
+        rules: list[Rule], packs: dict[str, list[Rule]] | None = None
     ) -> None:
         self._llm = llm
         self._sessions = sessions
         self._book = book
         self._rules = rules
+        self._packs = packs or {}
 
     # who owes whom straight from the ledger, with the dashboard one tap away
     async def owed(self, inbound: Inbound, transport: Transport) -> None:
@@ -453,7 +455,8 @@ class SpendAssistant:
             .replace("{timezone}", user.timezone)
             .replace("{currency}", user.currency)
         )
-        spend = SpendTools(self._sessions, user.id, zone, self._book, self._rules)
+        rules = by_country_code(user.wa_user_id, self._packs, self._rules)
+        spend = SpendTools(self._sessions, user.id, zone, self._book, rules)
         try:
             result = await asyncio.wait_for(
                 self._llm.run_tools(system, inbound.text or "", spend.tools()), ANSWER_TIMEOUT

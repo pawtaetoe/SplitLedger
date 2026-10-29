@@ -9,6 +9,7 @@ from splitledger.handlers.ask import SpendAssistant
 from splitledger.handlers.bill import GroupBills
 from splitledger.handlers.bills import UpcomingBills
 from splitledger.handlers.claim import ClaimChat
+from splitledger.handlers.currency import CurrencyChoice
 from splitledger.handlers.dashboard import DashboardLink
 from splitledger.handlers.log import ExpenseLogger
 from splitledger.handlers.plan import PlanManager
@@ -62,7 +63,7 @@ def app(sessions) -> tuple[Router, GroupBills, Overview]:
     router = Router(
         logger, MessageReader(llm, SG), SpendAssistant(llm, sessions, book, CORE_RULES),
         PlanManager(sessions, book, SG, llm), UpcomingBills(sessions, logger, 9), group,
-        ClaimChat(sessions, llm, ClaimBook(sessions), SG, links), links
+        ClaimChat(sessions, llm, ClaimBook(sessions), SG, links), links, CurrencyChoice(sessions)
     )
     return router, group, Overview(sessions, book)
 

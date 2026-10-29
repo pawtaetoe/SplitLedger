@@ -22,7 +22,8 @@ Built for the Meta Global AI Developer Hackathon (Indie track)
 | friend, once the bill closes: pays by PayNow, taps **I've paid** | you are told, and can tap Not received if it never arrives |
 | `how much did I spend on food this month?` | a total and the top items, from the database |
 | `can I afford a 300 hotel?` | spent, still due, really left, a rule of thumb |
-| `menu` | every action as a tap choice, including My dashboard |
+| `menu` | every action as a tap choice, including My dashboard and Main currency |
+| `currency JPY` | your main currency changes; it starts as your phone's country currency |
 | tap **See it all** under Bill closed, You owe or Plan saved | your dashboard, signed in for 30 days, can be added to the home screen |
 
 ## Which Meta model does what
@@ -45,7 +46,7 @@ You need Docker, [uv](https://docs.astral.sh/uv/), ffmpeg (for voice notes) and 
 
 ```bash
 git clone <this repo> && cd SplitLedger
-cp .env.example .env        # set LOCALE=sg, META_API_KEY and LLM_MODEL
+cp .env.example .env        # set META_API_KEY and LLM_MODEL
 make setup                  # install packages and git hooks
 make dev                    # start postgres, run migrations, serve on :8000
 open http://localhost:8000/dev/chat
@@ -73,7 +74,9 @@ Other commands:
 | `jobs/` | the reminder loop: due bills and bill nudges |
 
 Region specific bits (Singapore words like kopi and MRT, MAS loan rules, PayNow) live in
-`*_sg.py` packs picked by `LOCALE`. The core works in any currency.
+`*_sg.py` packs picked by each user's phone number: +65 gets the Singapore pack, PayNow
+included. The number also sets the starting currency and timezone. `LOCALE` is the pack for
+numbers with no pack of their own. The core works in any currency.
 
 ### Scalability
 

@@ -1,5 +1,6 @@
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -26,6 +27,26 @@ class Locale:
         keys = {*self.words, *words}
         merged = {key: self.words.get(key, ()) + words.get(key, ()) for key in keys}
         return Locale(currency, symbols, merged, timezone)
+
+
+# the value for the longest country calling code a whatsapp number starts with, else fallback
+def by_country_code[T](wa_user_id: str, table: Mapping[str, T], fallback: T) -> T:
+    digits = re.sub(r"\D", "", wa_user_id)
+    for size in (3, 2, 1):
+        if digits[:size] in table:
+            return table[digits[:size]]
+    return fallback
+
+
+# the default region and the packs picked by a number's country calling code
+@dataclass(frozen=True)
+class Regions:
+    default: Locale
+    packs: dict[str, Locale] = field(default_factory=dict)
+
+    # the region for one whatsapp number
+    def for_user(self, wa_user_id: str) -> Locale:
+        return by_country_code(wa_user_id, self.packs, self.default)
 
 
 # common currency codes, any of these in a message lets the model pick the currency

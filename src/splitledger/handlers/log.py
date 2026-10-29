@@ -13,6 +13,7 @@ from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerEntry, LedgerKind, LedgerSource, LedgerStatus, User
+from splitledger.handlers.currency import currency_for, timezone_for
 from splitledger.llm.schemas import CURRENCY_CODES, ExpenseDraft, Locale, ReceiptDraft
 
 if TYPE_CHECKING:
@@ -104,7 +105,10 @@ async def ensure_user(
 ) -> tuple[uuid.UUID, bool]:
     created = await session.execute(
         insert(User)
-        .values(wa_user_id=wa_user_id, currency=locale.currency, timezone=locale.timezone)
+        .values(
+            wa_user_id=wa_user_id, currency=currency_for(wa_user_id, locale.currency),
+            timezone=timezone_for(wa_user_id, locale.timezone)
+        )
         .on_conflict_do_nothing(index_elements=["wa_user_id"])
         .returning(User.id)
     )
@@ -227,9 +231,10 @@ class ExpenseLogger:
         self, inbound: Inbound, transport: Transport, draft: ExpenseDraft, amount: int,
         source: LedgerSource
     ) -> None:
-        currency = draft.currency or self._locale.currency
         async with self._sessions() as session:
             user_id = await self._user_id(session, inbound.user_id)
+            user = await session.get(User, user_id)
+            currency = draft.currency or (user.currency if user else self._locale.currency)
             entry = LedgerEntry(
                 user_id=user_id,
                 kind=LedgerKind.EXPENSE,

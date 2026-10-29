@@ -8,7 +8,7 @@ from splitledger.llm.schemas import GLOBAL, BucketDraft, CustomPlan
 from splitledger.plans.quota import QuotaBook
 from tests.fakes import FakeLLM, FakeTransport
 
-ME = "6581234567"
+ME = "14155550100"
 
 
 # one message from me

@@ -563,7 +563,9 @@ class GroupBills:
                     payer.display_name = inbound.name
                 bill = Bill(
                     id=uuid.uuid4(), code=new_code(), payer_id=user_id, vendor=receipt.vendor,
-                    currency=receipt.currency or self._locale.currency,
+                    currency=receipt.currency or (
+                        payer.currency if payer is not None else self._locale.currency
+                    ),
                     category=receipt.category, even_ways=ways,
                     subtotal=sum(item.price_cents for item in receipt.items),
                     service=receipt.service_cents, tax=receipt.tax_cents,

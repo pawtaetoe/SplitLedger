@@ -14,14 +14,15 @@ from splitledger.handlers.ask import SpendAssistant
 from splitledger.handlers.bill import GroupBills
 from splitledger.handlers.bills import UpcomingBills
 from splitledger.handlers.claim import ClaimChat
+from splitledger.handlers.currency import CurrencyChoice
 from splitledger.handlers.dashboard import LINK_MINUTES, DashboardLink
 from splitledger.handlers.log import ExpenseLogger, quick_parse
 from splitledger.handlers.plan import PlanManager
 from splitledger.handlers.settle import SettleUp
 from splitledger.llm.client import MetaLLM
-from splitledger.llm.schemas import GLOBAL, ExpenseDraft, Locale, MessageResult
+from splitledger.llm.schemas import GLOBAL, ExpenseDraft, Locale, MessageResult, Regions
 from splitledger.llm.schemas_sg import SG
-from splitledger.pay.rails import PayRails, Rail
+from splitledger.pay.rails import PayRails
 from splitledger.pay.rails_sg import PayNow
 from splitledger.plans.afford import CORE_RULES
 from splitledger.plans.afford_sg import SG_RULES
@@ -35,7 +36,8 @@ LOG = logging.getLogger(__name__)
 # add a region with a new schemas module and list it here
 LOCALES = {"global": GLOBAL, "sg": SG}
 AFFORD_RULES = {"global": CORE_RULES, "sg": [*CORE_RULES, *SG_RULES]}
-RAILS: dict[str, tuple[Rail, ...]] = {"global": (), "sg": (PayNow(),)}
+# region packs picked by a number's country calling code, other numbers get LOCALE
+PACKS = {"65": "sg"}
 PROMPTS = Path(__file__).parents[1] / "llm" / "prompts"
 PROMPT = "".join(
     (PROMPTS / name).read_text(encoding="utf-8") for name in ("classify.md", "parse_expense.md")
@@ -71,6 +73,7 @@ MENU = [
     ("menu:bills", "Upcoming bills — see, add or get reminders"),
     ("menu:plan", "Budget plan — set one up or see how you're doing"),
     ("menu:dash", "My dashboard — who owes whom, bills and this month"),
+    ("menu:currency", "Main currency — what totals and plans use"),
     ("menu:undo", "Undo last entry — remove what you just saved")
 ]
 SPLIT_HINT = (
@@ -104,13 +107,13 @@ def claiming(inbound: Inbound) -> bool:
 
 # reads free text with one model call, keyword rules only when the model fails
 class MessageReader:
-    # model for reading and the locale for the fallback rules
-    def __init__(self, llm: LLM, locale: Locale) -> None:
+    # model for reading and the region, or regions by phone number, for the fallback rules
+    def __init__(self, llm: LLM, locale: Locale | Regions) -> None:
         self._llm = llm
-        self._locale = locale
+        self._regions = locale if isinstance(locale, Regions) else Regions(locale)
 
     # intent and expense from the model, rules when it is down, slow or returns junk
-    async def read(self, text: str) -> MessageResult:
+    async def read(self, text: str, user: str = "") -> MessageResult:
         try:
             return await asyncio.wait_for(
                 self._llm.structured(f"read_message: {PROMPT}{text}", MessageResult),
@@ -118,10 +121,10 @@ class MessageReader:
             )
         except Exception as error:
             LOG.warning("message model failed with %s, using rules", type(error).__name__)
-            return self.by_rules(text)
+            return self.by_rules(text, user)
 
-    # split word, question shape, then a loggable amount, else unclear
-    def by_rules(self, text: str) -> MessageResult:
+    # split word, question shape, then a loggable amount in the user's region words, else unclear
+    def by_rules(self, text: str, user: str = "") -> MessageResult:
         words = words_in(text)
         if "split" in words:
             by_item = bool(BY_ITEM.intersection(words))
@@ -134,7 +137,7 @@ class MessageReader:
             return MessageResult(intent="ask")
         if REPEAT_WORDS.intersection(words):
             return MessageResult(intent="upcoming")
-        draft = quick_parse(text, self._locale)
+        draft = quick_parse(text, self._regions.for_user(user))
         if draft is not None:
             return MessageResult(intent="log", expense=draft)
         return MessageResult(intent="unclear")
@@ -148,7 +151,7 @@ class Router:
     def __init__(
         self, logger: ExpenseLogger, reader: MessageReader, assistant: SpendAssistant,
         plans: PlanManager, bills: UpcomingBills, group: GroupBills, claims: ClaimChat,
-        dash: DashboardLink
+        dash: DashboardLink, currency: CurrencyChoice
     ) -> None:
         self._logger = logger
         self._reader = reader
@@ -158,6 +161,7 @@ class Router:
         self._group = group
         self._claims = claims
         self._dash = dash
+        self._currency = currency
 
     # greet new users unless they came to claim a bill, then pick the handler
     async def handle(self, inbound: Inbound, transport: Transport) -> None:
@@ -207,6 +211,9 @@ class Router:
         if button_id.startswith("menu:"):
             await self._menu_choice(inbound, button_id, transport)
             return
+        if button_id.startswith("cur:"):
+            await self._currency.on_button(inbound, button_id, transport)
+            return
         if button_id.startswith("undo:"):
             await self._logger.undo(inbound, button_id.removeprefix("undo:"), transport)
             return
@@ -219,7 +226,7 @@ class Router:
     # a photo is a receipt unless its caption asks to split
     async def _image(self, inbound: Inbound, transport: Transport) -> None:
         caption = (inbound.text or "").strip()
-        result = await self._reader.read(caption) if caption else None
+        result = await self._reader.read(caption, inbound.user_id) if caption else None
         if result is not None and result.intent == "split":
             unsure = result.split_mode == "unsure"
             bill = await self._group.from_receipt(inbound, transport, result.ways, unsure)
@@ -252,6 +259,8 @@ class Router:
         if words_in(text) and set(words_in(text)) <= MENU_WORDS:
             await self.menu(inbound, transport)
             return
+        if await self._currency.typed(inbound, text, transport):
+            return
         if CLOSE.match(text):
             await self._group.close_latest(inbound, transport)
             return
@@ -261,7 +270,7 @@ class Router:
         if NUMBER_LIST.match(text) and self._claims.has_bill(inbound.user_id):
             await self._claims.numbers(inbound, text, transport)
             return
-        result = await self._reader.read(text)
+        result = await self._reader.read(text, inbound.user_id)
         if result.intent == "log":
             draft = result.expense or ExpenseDraft(amount_cents=None)
             await self._logger.log(inbound, transport, draft, source)
@@ -301,6 +310,9 @@ class Router:
         if button_id == "menu:plan":
             await self._plans.show(inbound, transport)
             return
+        if button_id == "menu:currency":
+            await self._currency.ask(inbound, transport)
+            return
         if button_id == "menu:dash":
             await self._dash.send(inbound, transport)
             return
@@ -312,6 +324,7 @@ class Router:
 
 llm = MetaLLM()
 locale = LOCALES[settings.locale]
+regions = Regions(locale, {code: LOCALES[key] for code, key in PACKS.items()})
 # one set of exchange rates for plans and the dashboard, fetched twice a day at most
 rates = Rates(settings.exchange_rate_api_key)
 book = QuotaBook(SessionFactory, rates)
@@ -319,8 +332,9 @@ logger = ExpenseLogger(llm, SessionFactory, locale, book)
 bills = UpcomingBills(SessionFactory, logger, settings.remind_hour)
 # the bot number friends message to claim, from either provider
 bot_number = settings.whatsapp_bot_number or re.sub(r"\D", "", settings.twilio_whatsapp_from)
-# the pay rails this locale turns on and settling up, shared by the chat and the dashboard
-pay_rails = PayRails(RAILS[settings.locale])
+# pay rails and settling up, shared by the chat and the dashboard, paynow only offers itself
+# to singapore numbers in sgd, so it is on for everyone
+pay_rails = PayRails((PayNow(),))
 settle = SettleUp(SessionFactory, pay_rails)
 group = GroupBills(
     SessionFactory, logger, locale, ClaimTokens(settings.app_secret), settings.public_base_url,
@@ -332,11 +346,15 @@ links = DashboardLink(
 )
 message_router = Router(
     logger,
-    MessageReader(llm, locale),
-    SpendAssistant(llm, SessionFactory, book, AFFORD_RULES[settings.locale]),
+    MessageReader(llm, regions),
+    SpendAssistant(
+        llm, SessionFactory, book, AFFORD_RULES[settings.locale],
+        {code: AFFORD_RULES[key] for code, key in PACKS.items()}
+    ),
     PlanManager(SessionFactory, book, locale, llm, links),
     bills,
     group,
     ClaimChat(SessionFactory, llm, ClaimBook(SessionFactory), locale, links),
-    links
+    links,
+    CurrencyChoice(SessionFactory)
 )
