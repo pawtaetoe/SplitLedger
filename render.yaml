@@ -38,6 +38,5 @@ services:
 
 databases:
   - name: splitledger-db
-    # the free database lasts 30 days, enough for judging, upgrade to keep it after
     plan: free
     region: singapore 

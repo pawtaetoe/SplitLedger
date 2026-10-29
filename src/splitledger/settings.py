@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     meta_api_key: str = ""
     llm_base_url: str = "https://api.meta.ai/v1"
     llm_model: str = ""
+    # model for voice notes
+    voice_model: str = "muse-voice-transcribe-1.0"
     app_secret: str = ""
     # exchangerate-api.com key, optional, free sources are used without it
     exchange_rate_api_key: str = ""

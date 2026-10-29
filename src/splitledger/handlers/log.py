@@ -156,7 +156,7 @@ class ExpenseLogger:
                 f"*That voice note is too long*\nPlease keep it under {MAX_VOICE_SECONDS} seconds."
             )
             return None
-        # whatsapp voice notes are ogg opus
+        # whatsapp voice notes are ogg opus, the client turns them into wav
         heard = (await self._llm.transcribe(audio, "audio/ogg")).strip()
         if not heard:
             await transport.send_text(

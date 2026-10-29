@@ -40,7 +40,7 @@ bill split adds up to the cent.
 
 ## Run it locally
 
-You need Docker, [uv](https://docs.astral.sh/uv/) and a Meta Model API key.
+You need Docker, [uv](https://docs.astral.sh/uv/), ffmpeg (for voice notes) and a Meta Model API key.
 
 ```bash
 git clone <this repo> && cd SplitLedger

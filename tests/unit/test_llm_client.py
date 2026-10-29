@@ -1,11 +1,14 @@
 import hashlib
 import json
+import shutil
+import subprocess
 
 import httpx
 import pytest
 import respx
 
 from splitledger.contracts.llm import Tool
+from splitledger.llm.audio import to_wav
 from splitledger.llm.client import MetaLLM
 from splitledger.llm.schemas import SmokeResult
 
@@ -104,13 +107,32 @@ async def test_run_tools_executes_then_answers():
     assert result.calls == ["add"]
 
 
-# transcribe posts the audio and returns the text field
+# transcribe posts the wav as audio with the model settings and returns the transcript
 @respx.mock
 async def test_transcribe_returns_text():
     route = respx.post("https://api.meta.ai/v1/asr/transcribe").mock(
-        return_value=httpx.Response(200, json={"text": "coffee six fifty"})
+        return_value=httpx.Response(200, json={"transcript": "coffee six fifty"})
     )
     llm = MetaLLM(api_key="key", backoff=0)
-    text = await llm.transcribe(b"audio-bytes", "audio/ogg")
+    text = await llm.transcribe(b"RIFF-wav-bytes", "audio/wav")
     assert text == "coffee six fifty"
-    assert route.calls.last.request.headers["Authorization"] == "Bearer key"
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer key"
+    body = request.content.decode(errors="replace")
+    assert 'name="audio"; filename="voice.wav"' in body and "RIFF-wav-bytes" in body
+    assert '"model": "muse-voice-transcribe-1.0"' in body and '"audioEncoding": "WAV"' in body
+
+
+# an ogg voice note becomes 16 khz mono wav, a wav is left alone
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+async def test_to_wav():
+    assert await to_wav(b"RIFFabc") == b"RIFFabc"
+    made = subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=1", "-c:a",
+         "libopus", "-f", "ogg", "pipe:1"],
+        capture_output=True, check=True
+    ).stdout
+    wav = await to_wav(made)
+    assert wav[:4] == b"RIFF" and wav[8:12] == b"WAVE"
+    assert int.from_bytes(wav[22:24], "little") == 1
+    assert int.from_bytes(wav[24:28], "little") == 16000

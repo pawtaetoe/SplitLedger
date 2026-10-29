@@ -11,6 +11,7 @@ import httpx
 from pydantic import BaseModel
 
 from splitledger.contracts.llm import Tool, ToolRunResult
+from splitledger.llm.audio import to_wav
 from splitledger.settings import settings
 
 T = TypeVar("T")
@@ -43,6 +44,7 @@ class MetaLLM:
         self._key = api_key or settings.meta_api_key
         self._base = (base_url or settings.llm_base_url).rstrip("/")
         self._model = model or settings.llm_model
+        self._voice_model = settings.voice_model
         self._fixtures = fixtures_dir
         self._backoff = backoff
 
@@ -174,10 +176,14 @@ class MetaLLM:
                 )
         raise RuntimeError("tool loop did not finish")
 
-    # transcribe one audio clip
+    # transcribe one clip, the api takes a wav file plus its settings as json
     async def transcribe(self, audio: bytes, mime: str) -> str:
-        response = await self._post(
-            f"{self._base}/asr/transcribe", files={"file": ("audio", audio, mime)}
-        )
+        wav = await to_wav(audio)
+        request = {"model": self._voice_model, "mode": "PUSH_TO_TALK", "audioEncoding": "WAV"}
+        files: dict[str, tuple[str | None, str | bytes, str]] = {
+            "request": (None, json.dumps(request), "application/json"),
+            "audio": ("voice.wav", wav, "audio/wav")
+        }
+        response = await self._post(f"{self._base}/asr/transcribe", files=files)
         self._check(response)
-        return str(response.json().get("text", ""))
+        return str(response.json().get("transcript", ""))
