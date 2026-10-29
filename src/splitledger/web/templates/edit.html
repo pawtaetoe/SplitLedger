@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fix the items · SplitLedger</title>
+{% include "_style.html" %}
+<style>
+  .line-row { display: flex; gap: 8px; align-items: center; }
+  .line-row input[type=text] { margin: 4px 0; }
+  .line-row .name { flex: 1; }
+  .line-row .price { width: 96px; text-align: right; }
+  .line-row button { min-height: 44px; padding: 6px 10px; border-color: var(--line); color: var(--muted); }
+</style>
+</head>
+<body>
+{% macro cents(c) %}{{ "%d.%02d"|format(c // 100, c % 100) }}{% endmacro %}
+{% macro row(id, name, price) %}
+<li class="line-row">
+  <input type="hidden" name="item" value="{{ id }}">
+  <input class="name" type="text" name="name" value="{{ name }}" aria-label="Item name" placeholder="Item">
+  <input class="price" type="text" name="price" value="{{ price }}" inputmode="decimal" aria-label="Price" placeholder="0.00">
+  <button type="button" class="remove" aria-label="Remove this line">✕</button>
+</li>
+{% endmacro %}
+<main>
+  <h1>Fix the items</h1>
+  <p class="sub">Code {{ bill.code }} · prices in {{ bill.currency }}</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" id="edit">
+    <label for="vendor"><strong>Where</strong></label>
+    <input id="vendor" type="text" name="vendor" value="{{ bill.vendor or '' }}" placeholder="Restaurant name">
+    <h2>Lines</h2>
+    <p class="note">One line per dish. Two of the same? Give each its own line.</p>
+    <ul id="lines">
+      {% for item in items %}{{ row(item.id, item.name, cents(item.price_cents)) }}{% endfor %}
+      {{ row("", "", "") }}
+    </ul>
+    <button type="button" id="add">+ Add a line</button>
+    <h2>Service, tax and discounts</h2>
+    <input type="text" name="charges" value="{{ cents(bill.service + bill.tax - bill.discount) }}" inputmode="decimal" aria-label="Service, tax and discounts">
+    <p class="note">Leave 0.00 if the prices already include them.</p>
+    <div class="total" aria-live="polite">
+      <div class="grow">New total<br><strong id="sum">{{ bill.currency }} {{ cents(bill.total) }}</strong></div>
+      <span class="status">Receipt says<br>{{ bill.currency }} {{ cents(bill.total) }}</span>
+    </div>
+    <p><button type="submit" class="on">Save and update the message</button></p>
+  </form>
+</main>
+<template id="blank">{{ row("", "", "") }}</template>
+<script>
+  const form = document.getElementById("edit");
+  const cents = (text) => {
+    const found = (text || "").trim().replace("$", "").match(/^(\d+)(?:[.,](\d{1,2}))?$/);
+    return found ? Number(found[1]) * 100 + Number((found[2] || "0").padEnd(2, "0")) : 0;
+  };
+  const total = () => {
+    let sum = cents(form.charges.value);
+    form.querySelectorAll(".line-row").forEach((li) => {
+      if (li.querySelector(".name").value.trim()) sum += cents(li.querySelector(".price").value);
+    });
+    document.getElementById("sum").textContent =
+      "{{ bill.currency }} " + Math.floor(sum / 100) + "." + String(sum % 100).padStart(2, "0");
+  };
+  form.addEventListener("input", total);
+  form.addEventListener("click", (event) => {
+    if (event.target.classList.contains("remove")) {
+      event.target.closest("li").remove();
+      total();
+    }
+  });
+  document.getElementById("add").addEventListener("click", () => {
+    document.getElementById("lines").append(document.getElementById("blank").content.cloneNode(true));
+  });
+</script>
+</body>
+</html>

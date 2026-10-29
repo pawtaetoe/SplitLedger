@@ -56,17 +56,25 @@ async def test_bill_from_receipt(sessions):
     assert "https://sl.test/c/" not in forward
 
 
-# receipts without items or that don't add up make no bill
+# a receipt with no items makes no bill
 async def test_unsplittable_receipts(sessions):
-    for receipt, reply in [
-        (ReceiptDraft(total_cents=5000), bill_module.NO_ITEMS),
-        (DINNER.model_copy(update={"total_cents": 20000}), bill_module.NOT_ADDING_UP)
-    ]:
-        group, transport = maker(sessions, receipt)
-        await group.from_receipt(PHOTO, transport)
-        assert transport.sent_text[-1][1] == reply
+    group, transport = maker(sessions, ReceiptDraft(total_cents=5000))
+    await group.from_receipt(PHOTO, transport)
+    assert transport.sent_text[-1][1] == bill_module.NO_ITEMS
     async with sessions() as session:
         assert (await session.execute(select(Bill))).first() is None
+
+
+# lines that don't add up make a bill the payer fixes before anything goes to friends
+async def test_not_adding_up_asks_to_fix(sessions):
+    group, transport = maker(sessions, DINNER.model_copy(update={"total_cents": 20000}))
+    assert await group.from_receipt(PHOTO, transport) is None
+    async with sessions() as session:
+        bill = (await session.execute(select(Bill))).scalar_one()
+    to, text, buttons = transport.sent_buttons[-1]
+    assert text == bill_module.FIX_FIRST.format("SGD 118.80", "SGD 200.00")
+    assert buttons == [bill_module.edit_button(bill)]
+    assert transport.sent_text == []
 
 
 # a clash with an existing code is retried with a fresh one

@@ -15,6 +15,7 @@ from splitledger.jobs.reminders import reminder_loop
 from splitledger.settings import settings
 from splitledger.web.claim import claim_page, claim_router
 from splitledger.web.dashboard import dashboard_page, dashboard_router
+from splitledger.web.edit import edit_page, edit_router
 from splitledger.web.plan import plan_router
 
 # show our own info logs next to the uvicorn ones
@@ -35,9 +36,11 @@ app = FastAPI(title="SplitLedger", lifespan=lifespan)
 sender: Transport = twilio.transport if TWILIO else whatsapp.channel.transport
 claim_page.attach(group, sender)
 dashboard_page.attach(settle, pay_rails, sender)
+edit_page.attach(group, sender)
 app.include_router(twilio_router if TWILIO else whatsapp_router)
 app.include_router(claim_router)
 app.include_router(dashboard_router)
+app.include_router(edit_router)
 app.include_router(plan_router)
 if settings.env == "dev":
     app.include_router(dev_router)

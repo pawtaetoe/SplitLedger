@@ -16,6 +16,7 @@ from splitledger.handlers.dashboard import LINK_MINUTES, SEE_ALL, dashboard_url
 from splitledger.handlers.log import ExpenseLogger, ensure_user, money, receipt_adds_up
 from splitledger.handlers.settle import OWE_ALL, SettleUp
 from splitledger.llm.schemas import Locale, ReceiptDraft
+from splitledger.split.edit import BillEditor
 from splitledger.split.finalise import BillCloser, Closing, Leftovers
 from splitledger.split.tokens import ClaimTokens, LoginLinks
 
@@ -37,15 +38,28 @@ NO_ITEMS = (
     "*I couldn't read the items*\n"
     "Splitting needs each line. Try a flat, well lit photo of the whole receipt."
 )
-NOT_ADDING_UP = (
-    "*The lines don't add up*\n"
-    "I can't split this one by item. Try a clearer photo, or log it with no caption."
-)
 READY = (
     "*Bill ready · code {}*\n"
     "Forward the next message to your group. Each friend replies with what they had.\n"
-    "It closes by itself once everyone's in, and everyone is told what they owe."
+    "It closes by itself once everyone's in, and everyone is told what they owe.\n"
+    "A line misread? Tap Fix the items before you forward it."
 )
+UPDATED = (
+    "*Bill updated · code {}*\n"
+    "Forward the next message to your group. It replaces any earlier one.\n"
+    "It closes by itself once everyone's in."
+)
+FIX_FIRST = (
+    "*The lines don't add up*\n"
+    "With service and tax they come to {}, but the total is {}. Tap Fix the items to correct them, "
+    "then I'll make the message for your friends."
+)
+FIX_LINK = (
+    "*Fix the items*\n{}\n\n"
+    "Change names or prices, add or remove lines, then tap Save. "
+    "The link works for an hour."
+)
+EDIT_MINUTES = 60
 READY_EVEN = (
     "*Split {} ways · code {}*\n"
     "Each friend pays *{}* and your share is *{}*.\n"
@@ -150,6 +164,16 @@ def close_button(bill: Bill) -> list[tuple[str, str]]:
     return [(f"bill:close:{bill.code}", "Close the bill")]
 
 
+# the fix the items button for the payer of a bill split by item
+def edit_button(bill: Bill) -> tuple[str, str]:
+    return f"bill:edit:{bill.code}", "Fix the items"
+
+
+# links that let the payer edit one bill for an hour
+def edit_links(tokens: ClaimTokens, code: str) -> LoginLinks:
+    return LoginLinks(tokens, EDIT_MINUTES * 60, f"edit-{code.upper()}")
+
+
 # turns a group receipt into a shared bill friends can claim from
 class GroupBills:
     # sessions, the logger that reads receipts, signed links and where they point
@@ -164,6 +188,7 @@ class GroupBills:
         self._base_url = base_url.rstrip("/")
         self._bot_number = bot_number
         self._closer = BillCloser(sessions)
+        self._editor = BillEditor(sessions)
         self._me = LoginLinks(tokens, LINK_MINUTES * 60)
         self._settle = settle
 
@@ -185,15 +210,20 @@ class GroupBills:
             bill, _ = await self._create(inbound, receipt, None)
             await self._ask_how(inbound, transport, bill, ways, by_item)
             return None
-        if ways is None and problem is None:
-            problem = NO_ITEMS if not receipt.items else (
-                None if receipt_adds_up(receipt) else NOT_ADDING_UP
-            )
+        if ways is None and problem is None and receipt.items and not receipt_adds_up(receipt):
+            bill, items = await self._create(inbound, receipt, None)
+            charges = bill.service + bill.tax - bill.discount
+            lines = money(sum(item.price_cents for item in items) + charges, bill.currency)
+            text = FIX_FIRST.format(lines, money(bill.total, bill.currency))
+            await transport.send_buttons(inbound.user_id, text, [edit_button(bill)])
+            return None
+        if ways is None and problem is None and not receipt.items:
+            problem = NO_ITEMS
         if problem:
             await transport.send_text(inbound.user_id, problem)
             return None
         bill, items = await self._create(inbound, receipt, ways)
-        await self._send(inbound, transport, bill, items)
+        await self._send(inbound.user_id, transport, bill, items)
         return bill
 
     # share the payer's latest open bill evenly, asked for by message after the photo
@@ -222,11 +252,11 @@ class GroupBills:
         if bill is None:
             await transport.send_text(inbound.user_id, NO_BILL.format(ways))
             return
-        await self._send(inbound, transport, bill, [])
+        await self._send(inbound.user_id, transport, bill, [])
 
     # the note for the payer then the message to forward, by item or even
     async def _send(
-        self, inbound: Inbound, transport: Transport, bill: Bill, items: list[BillItem]
+        self, to: str, transport: Transport, bill: Bill, items: list[BillItem], ready: str = READY
     ) -> None:
         chat_url = f"https://wa.me/{self._bot_number}?text={quote(f'CLAIM {bill.code}')}"
         if bill.even_ways:
@@ -234,11 +264,21 @@ class GroupBills:
             ready = READY_EVEN.format(
                 bill.even_ways, bill.code, money(each, bill.currency), money(mine, bill.currency)
             )
-            await transport.send_buttons(inbound.user_id, ready, close_button(bill))
-            await transport.send_text(inbound.user_id, even_text(bill, chat_url))
+            await transport.send_buttons(to, ready, close_button(bill))
+            await transport.send_text(to, even_text(bill, chat_url))
             return
-        await transport.send_buttons(inbound.user_id, READY.format(bill.code), close_button(bill))
-        await transport.send_text(inbound.user_id, forward_text(bill, items, chat_url))
+        buttons = [edit_button(bill), *close_button(bill)]
+        await transport.send_buttons(to, ready.format(bill.code), buttons)
+        await transport.send_text(to, forward_text(bill, items, chat_url))
+
+    # after the payer fixed the items, a fresh message to forward instead of the first one
+    async def edited(self, to: str, code: str, transport: Transport) -> None:
+        async with self._sessions() as session:
+            bill = (await session.execute(select(Bill).where(Bill.code == code))).scalar_one()
+            items = list((await session.execute(
+                select(BillItem).where(BillItem.bill_id == bill.id).order_by(BillItem.position)
+            )).scalars())
+        await self._send(to, transport, bill, items, UPDATED)
 
     # close by button: the first tap, then leftovers or a short even split answered
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
@@ -267,9 +307,22 @@ class GroupBills:
         if action in ("items", "even"):
             await self._chosen(inbound, transport, bill, action, choice)
             return
+        if action == "edit":
+            await self._edit_link(inbound, transport, bill)
+            return
         await self._close(inbound, transport, bill, choice if action == "rest" else (
             "force" if action == "force" else "ask"
         ))
+
+    # a link to fix the items, only while no friend has joined
+    async def _edit_link(self, inbound: Inbound, transport: Transport, bill: Bill) -> None:
+        found = await self._editor.load(bill.code, bill.payer_id)
+        if isinstance(found, str):
+            await transport.send_text(inbound.user_id, found)
+            return
+        token = edit_links(self._tokens, bill.code).make(str(bill.payer_id), datetime.now(UTC))
+        url = f"{self._base_url}/e/{bill.code}/{token}"
+        await transport.send_text(inbound.user_id, FIX_LINK.format(url))
 
     # how to split, by item only when the lines add up, evenly with the head count if known
     async def _ask_how(
@@ -301,7 +354,7 @@ class GroupBills:
                 select(BillItem).where(BillItem.bill_id == bill.id).order_by(BillItem.position)
             )).scalars())
             await session.commit()
-        await self._send(inbound, transport, fresh, items)
+        await self._send(inbound.user_id, transport, fresh, items)
 
     # close bills everyone has claimed, and ask once about bills left open a day
     async def nudge(self, transport: Transport, now: datetime) -> int:

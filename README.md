@@ -17,6 +17,7 @@ Built for the Meta Global AI Developer Hackathon (Indie track)
 | a voice note "grab to office twelve eighty" | Logged SGD 12.80 · Transport |
 | a receipt photo | items and total, Save or Cancel |
 | a receipt photo with caption `split` | a bill code and one message to forward to friends |
+| tap **Fix the items** if a line is misread | a page to fix names and prices, then a fresh message to forward |
 | friend: taps the link, sends `CLAIM K7Q2AB`, replies `2, 6` | their share so far, a dish picked by two is shared |
 | friend, once the bill closes: pays by PayNow, taps **I've paid** | you are told, and can tap Not received if it never arrives |
 | `how much did I spend on food this month?` | a total and the top items, from the database |
