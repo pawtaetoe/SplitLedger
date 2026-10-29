@@ -1,3 +1,5 @@
+import base64
+import logging
 import re
 import uuid
 from datetime import UTC, datetime
@@ -19,6 +21,7 @@ from splitledger.split.overview import Overview
 from splitledger.split.tokens import ClaimTokens, LoginLinks
 from splitledger.web.claim import render
 
+LOG = logging.getLogger(__name__)
 # pages a link button may open, the first part of the path
 LINK_PAGES = frozenset({"b", "c", "d", "e"})
 # the dashboard tabs, key and label
@@ -141,14 +144,24 @@ dashboard_page = DashboardPage(
 dashboard_router = APIRouter()
 
 
-# a link button from the chat, its path has ~ for / so it fits one template variable
+# a link button from the chat, its path is url safe base64 so it fits one template variable
 @dashboard_router.get("/l/{key}")
-async def link(key: str, request: Request) -> Response:
-    path = key.replace("~", "/")
+async def link(key: str) -> Response:
+    try:
+        path = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4)).decode()
+    except (ValueError, UnicodeDecodeError):
+        path = ""
     if path.split("/", 1)[0] not in LINK_PAGES or "//" in path or "\\" in path:
+        LOG.warning("link button with an unknown key")
         return RedirectResponse("/me", 303)
-    query = f"?{request.url.query}" if request.url.query else ""
-    return RedirectResponse(f"/{path}{query}", 303)
+    LOG.info("link button to /%s", path.split("/", 1)[0])
+    return RedirectResponse(f"/{path}", 303)
+
+
+# the bare address goes to the dashboard, or how to sign in
+@dashboard_router.get("/")
+async def home() -> Response:
+    return RedirectResponse("/me", 303)
 
 
 # the link from the chat

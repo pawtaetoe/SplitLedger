@@ -1,3 +1,5 @@
+import base64
+
 # a choice title may carry a description after this separator
 SEP = " — "
 
@@ -22,3 +24,8 @@ def with_descriptions(text: str, buttons: list[tuple[str, str]]) -> str:
 def numbered(text: str, buttons: list[tuple[str, str]]) -> str:
     lines = [f"*{number}* · {title}" for number, (_, title) in enumerate(buttons, 1)]
     return f"{text}\n\n" + "\n".join(lines) + "\n\n_Reply with a number_"
+
+
+# a path as url safe base64 with no padding, so no character can upset a button url
+def link_key(path: str) -> str:
+    return base64.urlsafe_b64encode(path.encode()).decode().rstrip("=")

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import splitledger.channels.twilio as twilio
+from splitledger.channels.layout import link_key
 from splitledger.channels.whatsapp import WhatsAppChannel
 from splitledger.contracts.messages import Inbound
 from splitledger.settings import settings
@@ -243,7 +244,8 @@ async def test_send_link_button(monkeypatch):
     sent = parse_qs(route.calls.last.request.content.decode())
     assert sent["ContentSid"] == ["HX9"]
     values = json.loads(sent["ContentVariables"][0])
-    assert values == {"1": "*Fix the items*", "2": "e~K7Q2AB~t.1.s"}
+    assert values == {"1": "*Fix the items*", "2": link_key("e/K7Q2AB/t.1.s")}
+    assert values["2"].replace("-", "").replace("_", "").isalnum()
     action = json.loads(created.calls.last.request.content)["types"]["twilio/call-to-action"]
     button = {"type": "URL", "title": "Fix the items", "url": f"{BASE}/l/{{{{2}}}}"}
     assert action["actions"][0] == button

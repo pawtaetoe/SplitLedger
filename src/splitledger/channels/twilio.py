@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
-from splitledger.channels.layout import numbered, split_choice, with_descriptions
+from splitledger.channels.layout import link_key, numbered, split_choice, with_descriptions
 from splitledger.channels.whatsapp import WhatsAppChannel
 from splitledger.contracts.messages import Inbound
 from splitledger.handlers.router import message_router
@@ -174,10 +174,10 @@ class TwilioTransport:
         self._templates[name] = sid
         return sid
 
-    # text with one link button, the address goes through /l/ so its variable has no slashes
+    # text with one link button, the address goes through /l/ as plain letters and digits
     async def send_link(self, to: str, text: str, label: str, url: str) -> None:
         base = settings.public_base_url.rstrip("/")
-        key = url.removeprefix(base + "/").replace("/", "~")
+        key = link_key(url.removeprefix(base + "/"))
         try:
             if not url.startswith(base + "/"):
                 raise ValueError("link is not on this app")
@@ -207,7 +207,7 @@ class TwilioTransport:
                 content = {
                     "friendly_name": name,
                     "language": "en",
-                    "variables": {"1": "body", "2": "d~sample"},
+                    "variables": {"1": "body", "2": link_key("d/sample")},
                     "types": {"twilio/call-to-action": {"body": "{{1}}", "actions": [action]}}
                 }
                 created = await client.post(CONTENT_URL, json=content, auth=auth)

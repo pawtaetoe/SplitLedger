@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from splitledger.channels.layout import link_key
 from splitledger.handlers.dashboard import bill_links
 from splitledger.split.tokens import ClaimTokens, LoginLinks
 from splitledger.web import dashboard as dashboard_module
@@ -73,12 +74,14 @@ def test_link_buttons():
     app = FastAPI()
     app.include_router(dashboard_router)
     web = TestClient(app)
-    went = web.get("/l/e~K7Q2AB~t.1.s", follow_redirects=False)
-    assert went.status_code == 303 and went.headers["location"] == "/e/K7Q2AB/t.1.s"
-    plan = web.get("/l/d~t.1.s?to=plan", follow_redirects=False)
+    went = web.get(f"/l/{link_key('b/K7Q2AB/bill-K7Q2AB:u.1.s')}", follow_redirects=False)
+    assert went.status_code == 303 and went.headers["location"] == "/b/K7Q2AB/bill-K7Q2AB:u.1.s"
+    plan = web.get(f"/l/{link_key('d/t.1.s?to=plan')}", follow_redirects=False)
     assert plan.headers["location"] == "/d/t.1.s?to=plan"
-    for bad in ["x~evil", "~~evil.example", "d~~evil.example"]:
-        assert web.get(f"/l/{bad}", follow_redirects=False).headers["location"] == "/me"
+    for bad in ["x/evil", "//evil.example", "d//evil.example"]:
+        assert web.get(f"/l/{link_key(bad)}", follow_redirects=False).headers["location"] == "/me"
+    assert web.get("/l/not-base64!", follow_redirects=False).headers["location"] == "/me"
+    assert web.get("/", follow_redirects=False).headers["location"] == "/me"
 
 
 # a bill link opens only its own bill for two weeks, never the dashboard
