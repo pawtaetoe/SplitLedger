@@ -59,7 +59,7 @@ async def test_balances_tool(sessions):
 async def test_owed_text(sessions):
     bill, _, anna = await claimed(sessions)
     before = await owed_text(sessions, QuotaBook(sessions), anna.id)
-    assert before.startswith("*Open bills, not owed yet*")
+    assert before.startswith("*Open shared bills, not owed yet*")
     await BillCloser(sessions).close(bill.id)
     after = await owed_text(sessions, QuotaBook(sessions), anna.id)
     assert after == "*You owe*\n- Tommy *SGD 24.14*"

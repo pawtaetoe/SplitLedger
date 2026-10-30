@@ -72,7 +72,7 @@ MENU = [
     ("menu:split", "Split a bill — share a receipt with friends"),
     ("menu:bills", "Upcoming bills — see, add or get reminders"),
     ("menu:plan", "Budget plan — set one up or see how you're doing"),
-    ("menu:dash", "My dashboard — who owes whom, bills and this month"),
+    ("menu:dash", "My dashboard — who owes whom, shared bills and this month"),
     ("menu:currency", "Main currency — what totals and plans use"),
     ("menu:undo", "Undo last entry — remove what you just saved")
 ]

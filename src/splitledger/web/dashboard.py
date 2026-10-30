@@ -25,7 +25,8 @@ LOG = logging.getLogger(__name__)
 # pages a link button may open, the first part of the path
 LINK_PAGES = frozenset({"b", "c", "d", "e"})
 # the dashboard tabs, key and label
-TABS = {"overview": "Overview", "bills": "Bills", "spending": "Spending", "coming": "Coming up"}
+# split receipts are shared bills, rent and the like are upcoming bills
+TABS = {"overview": "Overview", "bills": "Shared", "spending": "Spending", "coming": "Upcoming"}
 EXPIRED = (
     "This link has expired",
     "Links from the chat work for 15 minutes. Tap below to get a fresh one in WhatsApp."

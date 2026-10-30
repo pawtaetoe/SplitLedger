@@ -502,5 +502,5 @@ async def owed_text(
     if owed:
         parts.append("*Owed to you*\n" + "\n".join(owed))
     if waiting:
-        parts.append("*Open bills, not owed yet*\n" + "\n".join(waiting))
+        parts.append("*Open shared bills, not owed yet*\n" + "\n".join(waiting))
     return "\n\n".join(parts) if parts else ALL_SQUARE

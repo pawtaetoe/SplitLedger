@@ -26,7 +26,7 @@ SEE_ALL = "See it all"
 # what each page is called, what it is for and its button
 PAGES = {
     "me": (
-        "Your dashboard", "Who owes whom, open bills, this month and what's coming up.",
+        "Your dashboard", "Who owes whom, shared bills, this month and upcoming bills.",
         "Open dashboard"
     ),
     "plan": (

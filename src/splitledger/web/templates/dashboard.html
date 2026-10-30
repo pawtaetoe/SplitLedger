@@ -95,10 +95,10 @@
   </section>
 
   <section aria-labelledby="open">
-    <h2 id="open">Open bills</h2>
+    <h2 id="open">Open shared bills</h2>
     {% if board.paid %}
     {{ bill_rows(board.paid[:2]) }}
-    {% if board.paid|length > 2 %}<a class="more" href="/me?tab=bills">See all {{ board.paid|length }} bills</a>{% endif %}
+    {% if board.paid|length > 2 %}<a class="more" href="/me?tab=bills">See all {{ board.paid|length }} shared bills</a>{% endif %}
     {% else %}<p class="note">None open. Send a receipt photo with the caption split.</p>{% endif %}
   </section>
 
@@ -113,18 +113,18 @@
   <section aria-labelledby="next">
     <h2 id="next">Next up</h2>
     <ul class="card"><li class="item"><span class="date">{{ day(next.next_on) }}</span><span class="grow title">{{ next.plan.label }}</span><span class="amount">{{ money(next.plan.amount_cents, next.plan.currency) }}</span></li></ul>
-    <a class="more" href="/me?tab=coming">See what's coming</a>
+    <a class="more" href="/me?tab=coming">See upcoming bills</a>
   </section>
   {% endif %}
 
   {% elif tab == "bills" %}
   <section aria-labelledby="paid">
-    <h2 id="paid">Bills you paid</h2>
+    <h2 id="paid">Shared bills you paid</h2>
     {% if board.paid %}{{ bill_rows(board.paid) }}{% else %}<p class="note">None open. Send a receipt photo with the caption split to start one.</p>{% endif %}
   </section>
   {% if board.joined %}
   <section aria-labelledby="joined">
-    <h2 id="joined">Bills you're in</h2>
+    <h2 id="joined">Shared bills you're in</h2>
     {{ bill_rows(board.joined) }}
   </section>
   {% endif %}
@@ -184,7 +184,7 @@
 
   {% else %}
   <section aria-labelledby="coming">
-    <h2 id="coming">Coming up</h2>
+    <h2 id="coming">Upcoming bills</h2>
     {% if board.coming %}
     <ul class="card">
       {% for item in board.coming %}
