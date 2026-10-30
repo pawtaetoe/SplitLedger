@@ -219,6 +219,9 @@ class Router:
         if button_id.startswith("undo:"):
             await self._logger.undo(inbound, button_id.removeprefix("undo:"), transport)
             return
+        if button_id.startswith("cat:"):
+            await self._logger.on_category(inbound, button_id, transport)
+            return
         if button_id.startswith("split:"):
             entry_id, _, key = button_id.removeprefix("split:").partition(":")
             receipt = await self._logger.split_instead(inbound, entry_id, key, transport)

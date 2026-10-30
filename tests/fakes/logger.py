@@ -48,6 +48,10 @@ class FakeLogger:
         self.calls.append("split_instead")
         return self.split_receipt
 
+    # record a category button
+    async def on_category(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
+        self.calls.append("on_category")
+
     # record the confirmed receipt key
     async def confirm_receipt(self, inbound: Inbound, key: str, transport: Transport) -> None:
         self.calls.append("confirm_receipt")

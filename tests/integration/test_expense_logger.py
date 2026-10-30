@@ -137,7 +137,7 @@ async def test_receipt_split_instead(sessions):
     transport.media["photo-1"] = b"jpeg-bytes"
     logger = ExpenseLogger(FakeLLM({"parse_receipt": receipt}), sessions, GLOBAL)
     await logger.log_receipt(Inbound("m1", "14155550100", "image", media_ref="photo-1"), transport)
-    undo, split = transport.sent_buttons[0][2]
+    undo, split, _ = transport.sent_buttons[0][2]
     assert undo[0].startswith("undo:") and split[1] == "Split it instead"
     entry_id, _, key = split[0].removeprefix("split:").partition(":")
     tap = text("14155550100", "2")
@@ -147,6 +147,28 @@ async def test_receipt_split_instead(sessions):
     assert voided is not None
     assert await logger.split_instead(tap, entry_id, key, transport) is None
     assert [text for _, text in transport.sent_text] == [READING, SPLIT_GONE]
+
+
+# change category lists the categories, then moves only the sender's own live entry
+async def test_change_category(sessions):
+    transport = FakeTransport()
+    logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
+    await log(logger, transport, "14155550100", "uber 14.20")
+    change = transport.sent_buttons[0][2][-1]
+    assert change[1] == "Change category"
+    me = text("14155550100", "tap")
+    await logger.on_category(me, change[0], transport)
+    _, ask, choices = transport.sent_buttons[-1]
+    assert ask == log_module.PICK_CATEGORY and len(choices) == 9
+    travel = next(button for button, name in choices if name == "Travel")
+    await logger.on_category(text("6599999999", "tap"), travel, transport)
+    assert transport.sent_text[-1] == ("6599999999", log_module.GONE)
+    await logger.on_category(me, travel, transport)
+    assert transport.sent_text[-1][1] == "✅ *Moved to Travel*\nUSD 14.20 · Travel · uber"
+    await logger.on_category(me, travel.rsplit(":", 1)[0] + ":Nonsense", transport)
+    assert transport.sent_buttons[-1][1] == log_module.PICK_CATEGORY
+    async with sessions() as session:
+        assert (await session.execute(select(LedgerEntry.category))).scalar_one() == "Travel"
 
 
 # undo last shows the newest entry and removes it only once confirmed, then the one before

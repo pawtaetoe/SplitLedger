@@ -3,7 +3,7 @@ import re
 import uuid
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, get_args
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -14,7 +14,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerEntry, LedgerKind, LedgerSource, LedgerStatus, User
 from splitledger.handlers.currency import currency_for, timezone_for
-from splitledger.llm.schemas import CURRENCY_CODES, ExpenseDraft, Locale, ReceiptDraft
+from splitledger.llm.schemas import CURRENCY_CODES, Category, ExpenseDraft, Locale, ReceiptDraft
 
 if TYPE_CHECKING:
     from splitledger.plans.quota import QuotaBook
@@ -32,6 +32,9 @@ READING = "Reading your receipt…"
 REMOVED = "*Removed {}*"
 NOTHING_TO_UNDO = "*Nothing to undo*\nIt's removed already, or nothing is logged yet."
 UNDO_ASK = "*Remove your last entry?*\n{}"
+PICK_CATEGORY = "*Which category?*"
+MOVED = "✅ *Moved to {}*\n{}"
+GONE = "*That entry is removed already*"
 NOTHING_TO_SAVE = "*Nothing to save*\nIt's saved already or has expired. Send the photo again."
 # optional currency symbol then an amount with up to two decimals
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
@@ -279,6 +282,7 @@ class ExpenseLogger:
         buttons = [(f"undo:{entry.id}", "Undo")]
         if key:
             buttons.append((f"split:{entry.id}:{key}", "Split it instead"))
+        buttons.append((f"cat:{entry.id}", "Change category"))
         await transport.send_buttons(inbound.user_id, text, buttons)
 
     # void one entry the sender owns, repeat taps change nothing
@@ -301,8 +305,31 @@ class ExpenseLogger:
             await transport.send_text(inbound.user_id, RESEND)
         return receipt
 
+    # cat:<entry> lists the categories, cat:<entry>:<category> moves the entry there
+    async def on_category(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
+        _, entry_id, category = (button_id.split(":", 2) + [""])[:3]
+        if category not in get_args(Category):
+            buttons = [(f"cat:{entry_id}:{name}", name) for name in get_args(Category)]
+            await transport.send_buttons(inbound.user_id, PICK_CATEGORY, buttons)
+            return
+        moved = await self._update_own(inbound.user_id, entry_id, {"category": category})
+        if moved is None:
+            await transport.send_text(inbound.user_id, GONE)
+            return
+        text = MOVED.format(category, entry_text(moved))
+        lines = await self._book.after_save(moved.user_id, category) if self._book else []
+        if lines:
+            text = text + "\n\n" + "\n".join(lines)
+        await transport.send_text(inbound.user_id, text)
+
     # void one entry the sender owns, the entry only when this call voided it
     async def _void(self, wa_user_id: str, entry_id: str) -> LedgerEntry | None:
+        return await self._update_own(wa_user_id, entry_id, {"voided_at": func.now()})
+
+    # change one entry the sender owns that is not voided, the entry or none
+    async def _update_own(
+        self, wa_user_id: str, entry_id: str, values: dict[str, Any]
+    ) -> LedgerEntry | None:
         try:
             target = uuid.UUID(entry_id)
         except ValueError:
@@ -315,7 +342,7 @@ class ExpenseLogger:
                 LedgerEntry.user_id == owner,
                 LedgerEntry.voided_at.is_(None)
             )
-            .values(voided_at=func.now())
+            .values(**values)
             .returning(LedgerEntry)
             .execution_options(synchronize_session=False)
         )

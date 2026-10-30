@@ -94,6 +94,7 @@ PROTOCOL_ROWS = [
     (button("undo:abc"), "undo"),
     (button("receipt:k1"), "confirm_receipt"),
     (button("split:abc:k1"), "split_instead"),
+    (button("cat:abc"), "on_category"),
     (text("menu"), "help"),
     (text("Help"), "help"),
     (button("save"), "echo"),
