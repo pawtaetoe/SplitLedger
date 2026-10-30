@@ -15,6 +15,8 @@ NOT_YOURS = "Only the person who paid can fix this bill."
 CLOSED = "This bill is closed, so it can't change now."
 STARTED = "Friends have started claiming, so the items can't change now."
 NO_LINES = "Keep at least one line with a name and a price."
+BAD_PRICE = "Check the price for {}, like 12.50."
+BAD_CHARGES = "Check service, tax and discounts, like 8.80 or 0."
 TOO_MANY = f"A bill can have up to {MAX_LINES} lines."
 
 
@@ -70,8 +72,14 @@ class BillEditor:
             return NO_LINES
         prices = [cents_of(row.price) for row in kept]
         extra = cents_of(charges) if charges.strip() else 0
-        if not kept or any(price is None for price in prices) or extra is None:
+        if not kept:
             return NO_LINES
+        # name the first line that can't be read so the payer knows what to fix
+        bad = [row.name.strip() for row, price in zip(kept, prices, strict=True) if price is None]
+        if bad:
+            return BAD_PRICE.format(bad[0])
+        if extra is None:
+            return BAD_CHARGES
         if len(kept) > MAX_LINES:
             return TOO_MANY
         async with self._sessions() as session:

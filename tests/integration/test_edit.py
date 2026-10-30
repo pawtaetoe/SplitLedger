@@ -6,7 +6,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.db.models import Bill, BillItem, User
 from splitledger.handlers import bill as bill_module
 from splitledger.split.claims import ClaimBook
-from splitledger.split.edit import NOT_YOURS, STARTED, BillEditor, Row
+from splitledger.split.edit import BAD_CHARGES, BAD_PRICE, NOT_YOURS, STARTED, BillEditor, Row
 from splitledger.split.tokens import ClaimTokens
 from tests.integration.test_group_bill import DINNER, ME, PHOTO, maker
 
@@ -22,6 +22,18 @@ async def misread(sessions) -> tuple[Bill, list[BillItem], User]:
         )).scalars())
         me = (await session.execute(select(User).where(User.wa_user_id == ME))).scalar_one()
     return bill, items, me
+
+
+# a price that can't be read is named, and nothing is saved
+async def test_bad_price_named(sessions):
+    bill, _, me = await misread(sessions)
+    editor = BillEditor(sessions)
+    rows = [Row("", "Tea", "2"), Row("", "Cake", "abc")]
+    assert await editor.save(bill.code, me.id, "", rows, "") == BAD_PRICE.format("Cake")
+    assert await editor.save(bill.code, me.id, "", rows[:1], "lots") == BAD_CHARGES
+    async with sessions() as session:
+        names = (await session.execute(select(BillItem.name))).scalars().all()
+    assert "Tea" not in names
 
 
 # fix the items sends the payer a link that opens this bill for them only

@@ -11,6 +11,7 @@
   .line-row .name { flex: 1; }
   .line-row .price { width: 96px; text-align: right; }
   .line-row button { min-height: 44px; padding: 6px 10px; border-color: var(--line); color: var(--muted); }
+  input[aria-invalid="true"] { border-color: var(--warn); }
 </style>
 </head>
 <body>
@@ -40,9 +41,10 @@
     <h2>Service, tax and discounts</h2>
     <input type="text" name="charges" value="{{ cents(bill.service + bill.tax - bill.discount) }}" inputmode="decimal" aria-label="Service, tax and discounts">
     <p class="note">Leave 0.00 if the prices already include them.</p>
+    <p id="check" class="error" role="alert" hidden></p>
     <div class="total" aria-live="polite">
       <div class="grow">New total<br><strong id="sum">{{ bill.currency }} {{ cents(bill.total) }}</strong></div>
-      <span class="status">Receipt says<br>{{ bill.currency }} {{ cents(bill.total) }}</span>
+      <span class="status">Receipt says {{ bill.currency }} {{ cents(bill.total) }}<br><strong id="match"></strong></span>
     </div>
     <p><button type="submit" class="on">Save and update the message</button></p>
   </form>
@@ -50,19 +52,40 @@
 <template id="blank">{{ row("", "", "") }}</template>
 <script>
   const form = document.getElementById("edit");
+  const receipt = {{ bill.total }};
+  // the same prices the server accepts, null when it can't read one
   const cents = (text) => {
-    const found = (text || "").trim().replace("$", "").match(/^(\d+)(?:[.,](\d{1,2}))?$/);
-    return found ? Number(found[1]) * 100 + Number((found[2] || "0").padEnd(2, "0")) : 0;
+    const found = (text || "").trim().replace(/^\$/, "").match(/^(\d{1,7})(?:[.,](\d{1,2}))?$/);
+    return found ? Number(found[1]) * 100 + Number((found[2] || "0").padEnd(2, "0")) : null;
+  };
+  const shown = (c) => "{{ bill.currency }} " + Math.floor(c / 100) + "." + String(c % 100).padStart(2, "0");
+  // mark a box that can't be read, true when it can
+  const mark = (input, ok) => {
+    input.setAttribute("aria-invalid", ok ? "false" : "true");
+    return ok;
   };
   const total = () => {
-    let sum = cents(form.charges.value);
+    const bad = [];
+    const extra = form.charges.value.trim() ? cents(form.charges.value) : 0;
+    if (!mark(form.charges, extra !== null)) bad.push("service, tax and discounts");
+    let sum = extra || 0;
     form.querySelectorAll(".line-row").forEach((li) => {
-      if (li.querySelector(".name").value.trim()) sum += cents(li.querySelector(".price").value);
+      const name = li.querySelector(".name").value.trim();
+      const price = li.querySelector(".price");
+      const value = cents(price.value);
+      if (!mark(price, !name || value !== null)) bad.push(name);
+      if (name && value !== null) sum += value;
     });
-    document.getElementById("sum").textContent =
-      "{{ bill.currency }} " + Math.floor(sum / 100) + "." + String(sum % 100).padStart(2, "0");
+    const check = document.getElementById("check");
+    check.hidden = !bad.length;
+    check.textContent = bad.length ? "Check the price for " + bad.join(", ") + ", like 12.50." : "";
+    document.getElementById("sum").textContent = shown(sum);
+    const off = sum - receipt;
+    document.getElementById("match").textContent = bad.length ? "" :
+      off === 0 ? "Matches ✓" : "Off by " + shown(Math.abs(off));
   };
   form.addEventListener("input", total);
+  total();
   form.addEventListener("click", (event) => {
     if (event.target.classList.contains("remove")) {
       event.target.closest("li").remove();
