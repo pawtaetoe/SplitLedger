@@ -50,8 +50,11 @@ async def test_bill_from_receipt(sessions):
     # two beers become one row each so different people can have them
     assert [item.name for item in items] == ["Chilli crab", "Beer", "Beer"]
     assert payer.user_id == me.id
-    ready, forward = transport.sent_buttons[-1][1], transport.sent_text[-1][1]
+    _, ready, buttons = transport.sent_buttons[-1]
+    forward = transport.sent_text[-1][1]
     assert ready == bill_module.READY.format(bill.code)
+    # no close button before anyone has joined
+    assert buttons == [bill_module.edit_button(bill)]
     assert f"https://wa.me/6512345678?text=CLAIM%20{bill.code}" in forward
     assert "https://sl.test/c/" not in forward
 
@@ -96,7 +99,7 @@ async def test_even_split_from_photo(sessions):
     async with sessions() as session:
         bill = (await session.execute(select(Bill))).scalar_one()
     assert bill.even_ways == 4
-    ready, forward = transport.sent_buttons[-1][1], transport.sent_text[-1][1]
+    ready, forward = transport.sent_text[-2][1], transport.sent_text[-1][1]
     assert ready == bill_module.READY_EVEN.format(4, bill.code, "CHF 64.17", "CHF 64.18")
     assert "Split evenly 4 ways: *CHF 64.17* each." in forward
 

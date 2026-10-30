@@ -38,16 +38,20 @@ NO_ITEMS = (
     "*I couldn't read the items*\n"
     "Splitting needs each line. Try a flat, well lit photo of the whole receipt."
 )
+# the close button waits until friends join, so one early tap can't close an empty bill
+CLOSE_EARLY = "To close it before everyone's in, send _close bill_."
 READY = (
     "*Bill ready · code {}*\n"
     "Forward the next message to your group. Each friend replies with what they had.\n"
     "It closes by itself once everyone's in, and everyone is told what they owe.\n"
-    "A line misread? Tap Fix the items before you forward it."
+    "A line misread? Tap Fix the items before you forward it.\n"
+    f"{CLOSE_EARLY}"
 )
 UPDATED = (
     "*Bill updated · code {}*\n"
     "Forward the next message to your group. It replaces any earlier one.\n"
-    "It closes by itself once everyone's in."
+    "It closes by itself once everyone's in.\n"
+    f"{CLOSE_EARLY}"
 )
 FIX_FIRST = (
     "*The lines don't add up*\n"
@@ -63,7 +67,8 @@ EDIT_MINUTES = 60
 READY_EVEN = (
     "*Split {} ways · code {}*\n"
     "Each friend pays *{}* and your share is *{}*.\n"
-    "Forward the next message to your group. It closes by itself once everyone has joined."
+    "Forward the next message to your group. It closes by itself once everyone has joined.\n"
+    f"{CLOSE_EARLY}"
 )
 UNKNOWN = "*I can't find that bill*\nSend a new receipt photo with the caption _split_."
 NOT_PAYER = "*Only the person who paid can change this bill*"
@@ -273,11 +278,10 @@ class GroupBills:
             ready = READY_EVEN.format(
                 bill.even_ways, bill.code, money(each, bill.currency), money(mine, bill.currency)
             )
-            await transport.send_buttons(to, ready, close_button(bill))
+            await transport.send_text(to, ready)
             await transport.send_text(to, even_text(bill, chat_url))
             return
-        buttons = [edit_button(bill), *close_button(bill)]
-        await transport.send_buttons(to, ready.format(bill.code), buttons)
+        await transport.send_buttons(to, ready.format(bill.code), [edit_button(bill)])
         await transport.send_text(to, forward_text(bill, items, chat_url))
 
     # after the payer fixed the items, a fresh message to forward instead of the first one
