@@ -2,8 +2,10 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from splitledger.channels import twilio, whatsapp
 from splitledger.channels.simulator import dev_router
@@ -42,6 +44,8 @@ app.include_router(claim_router)
 app.include_router(dashboard_router)
 app.include_router(edit_router)
 app.include_router(plan_router)
+# htmx is served from here so the pages still work when a cdn is blocked
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "web" / "static"), "static")
 if settings.env == "dev":
     app.include_router(dev_router)
 
