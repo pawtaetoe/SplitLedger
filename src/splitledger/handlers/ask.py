@@ -17,7 +17,7 @@ from splitledger.db.models import LedgerEntry, LedgerKind, PlannedSpend, User
 from splitledger.handlers.log import money
 from splitledger.llm.schemas import Category, by_country_code
 from splitledger.plans import afford
-from splitledger.plans.afford import Ask, Means, Rule, Spending, assess, to_cents
+from splitledger.plans.afford import AffordPack, Ask, Means, Rule, Spending, assess, to_cents
 from splitledger.plans.quota import QuotaBook
 from splitledger.plans.upcoming import EVERY, open_days, outlook
 from splitledger.split.overview import Overview
@@ -44,24 +44,19 @@ RANGE = {"start": DAYS, "end": {**DAYS, "description": "last local day, inclusiv
 CATEGORY = {"type": "string", "enum": CATEGORIES}
 Query = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 AMOUNT = {"type": "number", "description": "plain amount in their currency, not cents"}
-AFFORD = {
-    "type": "object",
-    "properties": {
-        "kind": {"type": "string", "enum": list(afford.KINDS)},
-        "price": AMOUNT,
-        "down_payment": AMOUNT,
-        "down_payment_pct": {"type": "number", "description": "down payment as a percent"},
-        "monthly_payment": AMOUNT,
-        "running_costs": {**AMOUNT, "description": "monthly insurance, fuel, parking"},
-        "term_months": {"type": "integer"},
-        "other_monthly_debt": AMOUNT,
-        "property_type": {"type": "string", "enum": list(afford.PROPERTY_TYPES)},
-        "omv": {**AMOUNT, "description": "Singapore open market value of a car"},
-        "category": CATEGORY,
-        "take_home": {**AMOUNT, "description": "monthly take home pay, only if they said it"},
-        "gross_income": {**AMOUNT, "description": "monthly pay before tax, only if they said it"}
-    },
-    "required": ["kind"]
+# can_afford arguments every region shares, packs add their own
+AFFORD_FIELDS = {
+    "kind": {"type": "string", "enum": list(afford.KINDS)},
+    "price": AMOUNT,
+    "down_payment": AMOUNT,
+    "down_payment_pct": {"type": "number", "description": "down payment as a percent"},
+    "monthly_payment": AMOUNT,
+    "running_costs": {**AMOUNT, "description": "monthly insurance, fuel, parking"},
+    "term_months": {"type": "integer"},
+    "other_monthly_debt": AMOUNT,
+    "category": CATEGORY,
+    "take_home": {**AMOUNT, "description": "monthly take home pay, only if they said it"},
+    "gross_income": {**AMOUNT, "description": "monthly pay before tax, only if they said it"}
 }
 UPCOMING = {
     "type": "object",
@@ -128,13 +123,15 @@ class SpendTools:
     # every query is scoped to this user and read in their timezone
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], user_id: uuid.UUID, zone: ZoneInfo,
-        book: QuotaBook, rules: list[Rule]
+        book: QuotaBook, rules: list[Rule], fields: dict[str, Any] | None = None
     ) -> None:
         self._sessions = sessions
         self._user_id = user_id
         self._zone = zone
         self._book = book
         self._rules = rules
+        # region arguments for can_afford, like omv for singapore numbers
+        self._fields = fields or {}
         # plans saved during this answer and whether each has a reminder, for the buttons
         self.added: list[tuple[uuid.UUID, bool]] = []
 
@@ -158,7 +155,7 @@ class SpendTools:
             Tool("plan_status", "budget plan buckets with quota, spent and left this period",
                  guarded(self.plan_status)),
             Tool("can_afford", "check a purchase, car or home against named affordability rules",
-                 guarded(self.can_afford), AFFORD),
+                 guarded(self.can_afford), self._afford_schema()),
             Tool("add_upcoming", "save a bill or purchase they expect, once or on repeat",
                  guarded(self.add_upcoming), UPCOMING),
             Tool("list_upcoming", "bills and purchases they expect, with what is due this month",
@@ -166,6 +163,11 @@ class SpendTools:
             Tool("remove_upcoming", "stop expecting a bill or purchase, by its name",
                  guarded(self.remove_upcoming), LABEL)
         ]
+
+    # the can_afford schema with this region's extra arguments
+    def _afford_schema(self) -> dict[str, Any]:
+        properties = {**AFFORD_FIELDS, **self._fields}
+        return {"type": "object", "properties": properties, "required": ["kind"]}
 
     # total per currency
     async def sum_spend(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -419,16 +421,16 @@ class SpendTools:
 
 # answers spending questions with the model calling read only tools
 class SpendAssistant:
-    # model for the tool loop, sessions, the quota book and the affordability rules in use,
+    # model for the tool loop, sessions, the quota book and the affordability pack in use,
     # packs swap in a region's rules by the country calling code of the user's number
     def __init__(
         self, llm: LLM, sessions: async_sessionmaker[AsyncSession], book: QuotaBook,
-        rules: list[Rule], packs: dict[str, list[Rule]] | None = None
+        pack: AffordPack, packs: dict[str, AffordPack] | None = None
     ) -> None:
         self._llm = llm
         self._sessions = sessions
         self._book = book
-        self._rules = rules
+        self._pack = pack
         self._packs = packs or {}
 
     # who owes whom straight from the ledger, with the dashboard one tap away
@@ -455,8 +457,8 @@ class SpendAssistant:
             .replace("{timezone}", user.timezone)
             .replace("{currency}", user.currency)
         )
-        rules = by_country_code(user.wa_user_id, self._packs, self._rules)
-        spend = SpendTools(self._sessions, user.id, zone, self._book, rules)
+        pack = by_country_code(user.wa_user_id, self._packs, self._pack)
+        spend = SpendTools(self._sessions, user.id, zone, self._book, pack.rules, pack.fields)
         try:
             result = await asyncio.wait_for(
                 self._llm.run_tools(system, inbound.text or "", spend.tools()), ANSWER_TIMEOUT

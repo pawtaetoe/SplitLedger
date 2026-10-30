@@ -44,7 +44,7 @@ NAMES = {
     "NZD": "New Zealand dollar", "CHF": "Swiss franc", "AED": "UAE dirham"
 }
 # offered after the user's own currencies, a whatsapp list holds ten
-COMMON = ("SGD", "USD", "EUR", "GBP", "MYR", "AUD", "JPY", "INR", "IDR", "THB")
+COMMON = ("USD", "EUR", "GBP", "AUD", "JPY", "INR", "SGD", "MYR", "IDR", "THB")
 KNOWN = frozenset({code.upper() for code in CURRENCY_CODES} | set(CALLING_CODES.values()))
 # a typed change like currency jpy or main currency usd
 TYPED = re.compile(r"^(?:base |main |home )?currency\s+(?:to\s+)?([a-z]{3})$", re.IGNORECASE)

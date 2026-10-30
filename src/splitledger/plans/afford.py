@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -175,6 +175,13 @@ def home_28_36(ask: Ask, means: Means) -> list[Verdict]:
 
 
 CORE_RULES: list[Rule] = [purchase_rule, car_20_4_10, home_28_36]
+
+
+# a region's affordability rules and the extra tool arguments only they use
+@dataclass(frozen=True)
+class AffordPack:
+    rules: list[Rule]
+    fields: dict[str, Any] = field(default_factory=dict)
 
 
 # whole percent of a whole, with under 1 for tiny shares

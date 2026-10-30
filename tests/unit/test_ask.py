@@ -5,6 +5,7 @@ import pytest
 
 from splitledger.handlers import ask
 from splitledger.handlers.ask import SpendTools, category_arg, day_range, guarded
+from splitledger.plans.afford_sg import SG_FIELDS
 
 SG = ZoneInfo("Asia/Singapore")
 
@@ -67,3 +68,11 @@ def test_month_helpers():
     assert ask.full_months(date(2026, 10, 15), date(2026, 11, 1)) == 0
     assert ask.full_months(date(2026, 10, 1), date(2026, 11, 1)) == 1
     assert ask.full_months(date(2026, 1, 9), date(2026, 11, 1)) == 3
+
+
+# singapore only arguments reach the model only when the region pack adds them
+def test_afford_fields_by_region():
+    plain = SpendTools(None, None, SG, None, []).tools()[5].parameters["properties"]
+    assert "omv" not in plain and "property_type" not in plain
+    extra = SpendTools(None, None, SG, None, [], SG_FIELDS).tools()[5].parameters["properties"]
+    assert "omv" in extra and "hdb" in extra["property_type"]["enum"]

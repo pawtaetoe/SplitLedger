@@ -13,7 +13,7 @@ ME = "6581234567"
 DINNER = ReceiptDraft(
     vendor="Jumbo", currency="SGD", category="Dining",
     items=[
-        ReceiptItem(name="Chilli crab", price_cents=8000),
+        ReceiptItem(name="Grilled salmon", price_cents=8000),
         ReceiptItem(name="Beer", qty=2, price_cents=2000)
     ],
     subtotal_cents=10000, service_cents=1000, tax_cents=880, total_cents=11880
@@ -48,7 +48,7 @@ async def test_bill_from_receipt(sessions):
     assert (bill.total, bill.currency, bill.payer_id) == (11880, "SGD", me.id)
     assert sum(item.price_cents for item in items) == bill.subtotal == 10000
     # two beers become one row each so different people can have them
-    assert [item.name for item in items] == ["Chilli crab", "Beer", "Beer"]
+    assert [item.name for item in items] == ["Grilled salmon", "Beer", "Beer"]
     assert payer.user_id == me.id
     _, ready, buttons = transport.sent_buttons[-1]
     forward = transport.sent_text[-1][1]

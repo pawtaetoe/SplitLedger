@@ -75,7 +75,8 @@ class SettleUp:
         if cents != share:
             text += "\n" + EARLIER.format(money(cents, currency))
         if offer.qr is not None:
-            caption = f"PayNow QR · {money(cents, currency)} to {name_of(creditor)}"
+            # the rail names itself in the label, like paynow to 9123 4567
+            caption = f"Pay {name_of(creditor)} {money(cents, currency)} · {offer.label}"
             await transport.send_image(debtor.wa_user_id, offer.qr, caption)
         buttons = [paid_button(creditor.id, currency), OWE_ALL]
         await transport.send_buttons(debtor.wa_user_id, f"{text}\n\n{offer.text}", buttons)

@@ -17,7 +17,7 @@ from splitledger.settings import settings
 NAMESPACE = uuid.UUID("5b1e4d3c-9a7f-4e2b-8c61-0d2f6a9e4b17")
 # days ago, local hour, cents, category, vendor, note, voided
 ROWS = [
-    (0, 8, 180, "Dining", None, "kopi", False),
+    (0, 8, 180, "Dining", None, "coffee", False),
     (0, 13, 1250, "Dining", None, "chicken rice and drink", False),
     (1, 9, 1420, "Transport", "Grab", "ride to office", False),
     (1, 19, 8240, "Groceries", "FairPrice", "groceries", False),

@@ -45,7 +45,7 @@ async def test_save_and_resend(sessions):
     bill, items, me = await misread(sessions)
     crab, beer, _ = items
     rows = [
-        Row(str(crab.id), "Chilli crab", "100.00"), Row(str(beer.id), "Beer", "10"),
+        Row(str(crab.id), "Grilled salmon", "100.00"), Row(str(beer.id), "Beer", "10"),
         Row("", "Rice", "1,50"), Row("", "", "")
     ]
     assert await BillEditor(sessions).save(bill.code, me.id, "Jumbo", rows, "18.80") is None
@@ -56,7 +56,7 @@ async def test_save_and_resend(sessions):
             .where(BillItem.bill_id == bill.id).order_by(BillItem.position)
         )).all())
     assert [(name, cents) for name, cents, _ in lines] == [
-        ("Chilli crab", 10000), ("Beer", 1000), ("Rice", 150)
+        ("Grilled salmon", 10000), ("Beer", 1000), ("Rice", 150)
     ]
     assert lines[0][2] == crab.id
     assert fresh is not None and (fresh.total, fresh.service, fresh.tax) == (13030, 1880, 0)

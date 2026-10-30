@@ -33,4 +33,4 @@ def test_fit():
     assert cut == "12. Garlic butter p…"
     assert len(cut) == layout.BUTTON_CHARS
     assert fit("12. Garlic butter prawns", row=True) == "12. Garlic butter prawns"
-    assert fit("Chilli crab with fried mantou", row=True) == "Chilli crab with fried…"
+    assert fit("Grilled salmon with garlic rice", row=True) == "Grilled salmon with gar…"

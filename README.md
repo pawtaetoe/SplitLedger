@@ -99,7 +99,7 @@ numbers with no pack of their own. The core works in any currency.
 - **No double charging:** closing a bill locks its row and is safe to repeat, so two closes at
   the same moment post each share once. Nudges are recorded, so they are never sent twice.
 - **Fallbacks:**
-  - If the model is slow or down, keyword rules still log "kopi 2.20".
+  - If the model is slow or down, keyword rules still log "coffee 2.20".
   - If one exchange rate source fails, the next of the three is tried, and the last good rates
     are kept.
 - **Limits:** Render's free Postgres has no backups and expires after 30 days. That covers

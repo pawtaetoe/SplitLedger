@@ -19,7 +19,7 @@ from splitledger.llm.schemas import ExpenseDraft, MessageResult, ReceiptDraft, R
 from splitledger.llm.schemas_sg import SG
 from splitledger.pay.rails import PayRails
 from splitledger.pay.rails_sg import PayNow
-from splitledger.plans.afford import CORE_RULES
+from splitledger.plans.afford import CORE_RULES, AffordPack
 from splitledger.plans.quota import QuotaBook
 from splitledger.split.claims import ClaimBook
 from splitledger.split.overview import Overview
@@ -60,8 +60,9 @@ def app(sessions) -> tuple[Router, GroupBills, Overview]:
     links = DashboardLink(sessions, LoginLinks(TOKENS, 900), "https://sl.test", SG)
     settle = SettleUp(sessions, PayRails((PayNow(),)))
     group = GroupBills(sessions, logger, SG, TOKENS, "https://sl.test", "6512345678", settle)
+    assistant = SpendAssistant(llm, sessions, book, AffordPack(CORE_RULES))
     router = Router(
-        logger, MessageReader(llm, SG), SpendAssistant(llm, sessions, book, CORE_RULES),
+        logger, MessageReader(llm, SG), assistant,
         PlanManager(sessions, book, SG, llm), UpcomingBills(sessions, logger, 9), group,
         ClaimChat(sessions, llm, ClaimBook(sessions), SG, links), links, CurrencyChoice(sessions)
     )

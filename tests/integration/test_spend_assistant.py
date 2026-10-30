@@ -9,12 +9,13 @@ from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, LedgerKind, User
 from splitledger.handlers import ask
 from splitledger.handlers.ask import SpendAssistant, SpendTools
-from splitledger.plans.afford import CORE_RULES
+from splitledger.plans.afford import CORE_RULES, AffordPack
 from splitledger.plans.quota import QuotaBook
 from tests.fakes import FakeLLM, FakeTransport
 
 SG = ZoneInfo("Asia/Singapore")
 ME = "6581234567"
+PACK = AffordPack(CORE_RULES)
 
 
 # a user with spending on known days, plus someone else and a voided entry
@@ -27,7 +28,7 @@ async def seed(sessions) -> User:
         # 11 30 pm on the 27th in singapore is still the 27th there
         late = datetime(2026, 10, 27, 15, 30, tzinfo=UTC)
         rows = [
-            (me, 650, "Dining", "kopi", late, None),
+            (me, 650, "Dining", "coffee", late, None),
             (me, 1420, "Transport", "grab", late - timedelta(days=1), None),
             (me, 4500, "Dining", "dinner", late - timedelta(days=2), None),
             (me, 9900, "Shopping", "shoes", late - timedelta(days=2), late),
@@ -62,7 +63,7 @@ async def test_local_day_boundary(sessions):
     me = await seed(sessions)
     tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)
     day = await tools.list_expenses({"start": "2026-10-27", "end": "2026-10-27"})
-    assert [row["what"] for row in day["expenses"]] == ["kopi"]
+    assert [row["what"] for row in day["expenses"]] == ["coffee"]
     next_day = await tools.list_expenses({"start": "2026-10-28", "end": "2026-10-28"})
     assert next_day["expenses"] == []
 
@@ -82,7 +83,7 @@ async def test_assistant_replies(sessions):
     llm.tool_result = ToolRunResult(text="You spent SGD 65.70 this week.")
     transport = FakeTransport()
     question = Inbound("m1", ME, "text", text="this week?")
-    await SpendAssistant(llm, sessions, QuotaBook(sessions), CORE_RULES).answer(question, transport)
+    await SpendAssistant(llm, sessions, QuotaBook(sessions), PACK).answer(question, transport)
     replies = [reply for _, reply in transport.sent_text]
     assert replies == [ask.CHECKING, "You spent SGD 65.70 this week."]
 
@@ -97,7 +98,7 @@ async def test_assistant_failure(sessions):
 
     transport = FakeTransport()
     question = Inbound("m1", ME, "text", text="?")
-    assistant = SpendAssistant(BrokenLLM(), sessions, QuotaBook(sessions), CORE_RULES)
+    assistant = SpendAssistant(BrokenLLM(), sessions, QuotaBook(sessions), PACK)
     await assistant.answer(question, transport)
     assert transport.sent_text[-1] == (ME, ask.UNAVAILABLE)
 
@@ -105,7 +106,7 @@ async def test_assistant_failure(sessions):
 # someone who never logged anything gets a hint and no model call
 async def test_assistant_new_user(sessions):
     transport = FakeTransport()
-    assistant = SpendAssistant(FakeLLM(), sessions, QuotaBook(sessions), CORE_RULES)
+    assistant = SpendAssistant(FakeLLM(), sessions, QuotaBook(sessions), PACK)
     await assistant.answer(Inbound("m1", ME, "text", text="?"), transport)
     assert transport.sent_text == [(ME, ask.NOTHING_YET)]
 
@@ -118,7 +119,7 @@ async def test_afford_caveat_and_pay(sessions):
     answer = "*No*, you'd need USD 15,000 a month."
     llm.tool_result = ToolRunResult(text=answer, calls=["can_afford"])
     transport = FakeTransport()
-    assistant = SpendAssistant(llm, sessions, QuotaBook(sessions), CORE_RULES)
+    assistant = SpendAssistant(llm, sessions, QuotaBook(sessions), PACK)
     await assistant.answer(Inbound("m1", ME, "text", text="can I afford a car?"), transport)
     assert transport.sent_text[-1][1].endswith("\n\n" + ask.DISCLAIMER)
     tools = SpendTools(sessions, me.id, SG, QuotaBook(sessions), CORE_RULES)

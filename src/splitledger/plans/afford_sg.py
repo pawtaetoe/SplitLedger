@@ -1,4 +1,4 @@
-from splitledger.plans.afford import Ask, Means, Rule, Verdict, share_check
+from splitledger.plans.afford import PROPERTY_TYPES, Ask, Means, Rule, Verdict, share_check
 
 MAS = "MAS rules for Singapore"
 # omv at or below this gets the higher loan limit
@@ -40,3 +40,9 @@ def mas_msr(ask: Ask, means: Means) -> list[Verdict]:
 
 
 SG_RULES: list[Rule] = [mas_car_loan, mas_tdsr, mas_msr]
+
+# arguments only the singapore rules read, offered to the model for +65 users
+SG_FIELDS = {
+    "property_type": {"type": "string", "enum": list(PROPERTY_TYPES)},
+    "omv": {"type": "number", "description": "Singapore open market value of a car"}
+}

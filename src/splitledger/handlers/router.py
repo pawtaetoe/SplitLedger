@@ -24,8 +24,8 @@ from splitledger.llm.schemas import GLOBAL, ExpenseDraft, Locale, MessageResult,
 from splitledger.llm.schemas_sg import SG
 from splitledger.pay.rails import PayRails
 from splitledger.pay.rails_sg import PayNow
-from splitledger.plans.afford import CORE_RULES
-from splitledger.plans.afford_sg import SG_RULES
+from splitledger.plans.afford import CORE_RULES, AffordPack
+from splitledger.plans.afford_sg import SG_FIELDS, SG_RULES
 from splitledger.plans.quota import QuotaBook
 from splitledger.settings import settings
 from splitledger.split.claims import ClaimBook
@@ -35,7 +35,7 @@ from splitledger.split.tokens import ClaimTokens, LoginLinks
 LOG = logging.getLogger(__name__)
 # add a region with a new schemas module and list it here
 LOCALES = {"global": GLOBAL, "sg": SG}
-AFFORD_RULES = {"global": CORE_RULES, "sg": [*CORE_RULES, *SG_RULES]}
+AFFORD = {"global": AffordPack(CORE_RULES), "sg": AffordPack([*CORE_RULES, *SG_RULES], SG_FIELDS)}
 # region packs picked by a number's country calling code, other numbers get LOCALE
 PACKS = {"65": "sg"}
 PROMPTS = Path(__file__).parents[1] / "llm" / "prompts"
@@ -355,8 +355,8 @@ message_router = Router(
     logger,
     MessageReader(llm, regions),
     SpendAssistant(
-        llm, SessionFactory, book, AFFORD_RULES[settings.locale],
-        {code: AFFORD_RULES[key] for code, key in PACKS.items()}
+        llm, SessionFactory, book, AFFORD[settings.locale],
+        {code: AFFORD[key] for code, key in PACKS.items()}
     ),
     PlanManager(SessionFactory, book, locale, llm, links),
     bills,

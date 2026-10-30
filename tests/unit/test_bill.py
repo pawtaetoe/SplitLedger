@@ -48,12 +48,12 @@ def test_forward_text():
         discount=0
     )
     items = [
-        BillItem(name="Chilli crab", qty=1, price_cents=8000),
+        BillItem(name="Grilled salmon", qty=1, price_cents=8000),
         BillItem(name="Beer", qty=2, price_cents=2000)
     ]
     text = forward_text(bill, items, "https://wa.me/1?text=CLAIM%20K7Q2AB")
     assert text.startswith("*Jumbo · SGD 118.80*\n")
-    assert "1. Chilli crab · SGD 80.00\n2. Beer x2 · SGD 20.00" in text
+    assert "1. Grilled salmon · SGD 80.00\n2. Beer x2 · SGD 20.00" in text
     assert "Service, tax and discounts: SGD 18.80" in text
     assert text.endswith("*Claim in WhatsApp*\nhttps://wa.me/1?text=CLAIM%20K7Q2AB")
     assert "See the bill" not in text
