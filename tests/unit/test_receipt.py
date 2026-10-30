@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from splitledger.contracts.messages import Inbound
+from splitledger.handlers import log as log_module
 from splitledger.handlers.log import READING, RECEIPT_PROMPT, ExpenseLogger, receipt_adds_up
 from splitledger.llm.client import MetaLLM
 from splitledger.llm.schemas import GLOBAL, ReceiptDraft, ReceiptItem
@@ -102,7 +103,7 @@ async def test_missing_total_asks_to_type():
 async def test_confirm_unknown_receipt():
     transport = FakeTransport()
     await ExpenseLogger(FakeLLM(), None, GLOBAL).confirm_receipt(photo(), "missing", transport)
-    assert transport.sent_text == [("6581234567", "Nothing to save")]
+    assert transport.sent_text == [("6581234567", log_module.NOTHING_TO_SAVE)]
 
 
 # each real receipt photo replays to the totals written next to it

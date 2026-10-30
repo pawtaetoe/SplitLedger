@@ -2,6 +2,7 @@ from sqlalchemy import func, select
 
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, User
+from splitledger.handlers import log as log_module
 from splitledger.handlers.log import READING, SPLIT_GONE, ExpenseLogger, quick_parse
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
 from tests.fakes import FakeLLM, FakeTransport
@@ -52,7 +53,9 @@ async def test_undo_voids_once(sessions):
     async with sessions() as session:
         second = (await session.execute(select(LedgerEntry.voided_at))).scalar_one()
     assert first is not None and first == second
-    assert [reply for _, reply in transport.sent_text] == ["Removed", "Nothing to undo"]
+    assert [reply for _, reply in transport.sent_text] == [
+        "*Removed USD 6.50 · Dining · coffee*", log_module.NOTHING_TO_UNDO
+    ]
 
 
 # another user cannot undo this entry
@@ -65,7 +68,7 @@ async def test_undo_ignores_other_user(sessions):
     async with sessions() as session:
         voided = (await session.execute(select(LedgerEntry.voided_at))).scalar_one()
     assert voided is None
-    assert transport.sent_text == [("6599999999", "Nothing to undo")]
+    assert transport.sent_text == [("6599999999", log_module.NOTHING_TO_UNDO)]
 
 
 # no amount asks for one and writes nothing
@@ -146,16 +149,28 @@ async def test_receipt_split_instead(sessions):
     assert [text for _, text in transport.sent_text] == [READING, SPLIT_GONE]
 
 
-# undo last voids the newest entry first and then the one before
+# undo last shows the newest entry and removes it only once confirmed, then the one before
 async def test_undo_last(sessions):
     transport = FakeTransport()
     logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
     await log(logger, transport, "14155550100", "coffee 6.50")
     await log(logger, transport, "14155550100", "uber 14.20")
-    await logger.undo_last(text("14155550100", "/undo"), transport)
+    me = text("14155550100", "/undo")
+
+    # ask about the newest entry and tap yes
+    async def confirm() -> str:
+        await logger.undo_last(me, transport)
+        _, ask, buttons = transport.sent_buttons[-1]
+        await logger.undo(me, buttons[0][0].removeprefix("undo:"), transport)
+        return ask
+
+    assert await confirm() == "*Remove your last entry?*\nUSD 14.20 · Transport · uber"
     async with sessions() as session:
         rows = (await session.execute(select(LedgerEntry.note, LedgerEntry.voided_at))).all()
     assert {note for note, voided in rows if voided is not None} == {"uber"}
-    await logger.undo_last(text("14155550100", "/undo"), transport)
-    await logger.undo_last(text("14155550100", "/undo"), transport)
-    assert [reply for _, reply in transport.sent_text] == ["Removed", "Removed", "Nothing to undo"]
+    await confirm()
+    await logger.undo_last(me, transport)
+    assert [reply for _, reply in transport.sent_text] == [
+        "*Removed USD 14.20 · Transport · uber*", "*Removed USD 6.50 · Dining · coffee*",
+        log_module.NOTHING_TO_UNDO
+    ]

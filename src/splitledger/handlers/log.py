@@ -29,6 +29,10 @@ RESEND = "*Removed from your spending*\nSend the photo again with the caption _s
 SPLIT_GONE = "*That receipt is already removed or split*"
 # sent before a photo goes to the model, which can take several seconds
 READING = "Reading your receipt…"
+REMOVED = "*Removed {}*"
+NOTHING_TO_UNDO = "*Nothing to undo*\nIt's removed already, or nothing is logged yet."
+UNDO_ASK = "*Remove your last entry?*\n{}"
+NOTHING_TO_SAVE = "*Nothing to save*\nIt's saved already or has expired. Send the photo again."
 # optional currency symbol then an amount with up to two decimals
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 
@@ -128,6 +132,12 @@ def money(cents: int, currency: str) -> str:
     return f"{currency} {cents // 100:,}.{cents % 100:02d}"
 
 
+# one entry for a reply line, like USD 4.50 · Dining · coffee
+def entry_text(entry: LedgerEntry) -> str:
+    parts = [money(entry.amount_cents, entry.currency), entry.category, entry.vendor or entry.note]
+    return " · ".join(part for part in parts if part)
+
+
 # logs text and receipt expenses and undoes them
 class ExpenseLogger:
     # model, ledger sessions, locale and the quota book that adds plan lines to replies
@@ -219,7 +229,7 @@ class ExpenseLogger:
     # save a receipt the user confirmed
     async def confirm_receipt(self, inbound: Inbound, key: str, transport: Transport) -> None:
         if key not in self._receipts or (inbound.user_id, key) in self._logged:
-            await transport.send_text(inbound.user_id, "Nothing to save")
+            await transport.send_text(inbound.user_id, NOTHING_TO_SAVE)
             return
         await self._save_receipt(inbound, transport, key)
 
@@ -273,7 +283,8 @@ class ExpenseLogger:
     # void one entry the sender owns, repeat taps change nothing
     async def undo(self, inbound: Inbound, entry_id: str, transport: Transport) -> None:
         voided = await self._void(inbound.user_id, entry_id)
-        await transport.send_text(inbound.user_id, "Removed" if voided else "Nothing to undo")
+        text = REMOVED.format(entry_text(voided)) if voided else NOTHING_TO_UNDO
+        await transport.send_text(inbound.user_id, text)
 
     # void a logged receipt and hand it back to split, none when it cannot be split here
     async def split_instead(
@@ -289,12 +300,12 @@ class ExpenseLogger:
             await transport.send_text(inbound.user_id, RESEND)
         return receipt
 
-    # void one entry the sender owns, true only when this call voided it
-    async def _void(self, wa_user_id: str, entry_id: str) -> bool:
+    # void one entry the sender owns, the entry only when this call voided it
+    async def _void(self, wa_user_id: str, entry_id: str) -> LedgerEntry | None:
         try:
             target = uuid.UUID(entry_id)
         except ValueError:
-            return False
+            return None
         owner = select(User.id).where(User.wa_user_id == wa_user_id).scalar_subquery()
         query = (
             update(LedgerEntry)
@@ -304,18 +315,18 @@ class ExpenseLogger:
                 LedgerEntry.voided_at.is_(None)
             )
             .values(voided_at=func.now())
-            .returning(LedgerEntry.id)
+            .returning(LedgerEntry)
             .execution_options(synchronize_session=False)
         )
         async with self._sessions() as session:
             voided = (await session.execute(query)).scalar_one_or_none()
             await session.commit()
-        return voided is not None
+        return voided
 
-    # void the latest expense the sender logged themselves
+    # show the latest expense the sender logged themselves and ask before removing it
     async def undo_last(self, inbound: Inbound, transport: Transport) -> None:
         query = (
-            select(LedgerEntry.id)
+            select(LedgerEntry)
             .join(User, LedgerEntry.user_id == User.id)
             .where(
                 User.wa_user_id == inbound.user_id,
@@ -328,7 +339,11 @@ class ExpenseLogger:
         )
         async with self._sessions() as session:
             latest = (await session.execute(query)).scalar_one_or_none()
-        await self.undo(inbound, str(latest or ""), transport)
+        if latest is None:
+            await transport.send_text(inbound.user_id, NOTHING_TO_UNDO)
+            return
+        buttons = [(f"undo:{latest.id}", "Yes, remove it")]
+        await transport.send_buttons(inbound.user_id, UNDO_ASK.format(entry_text(latest)), buttons)
 
     # get or create the user and return their id
     async def _user_id(self, session: AsyncSession, wa_user_id: str) -> uuid.UUID:

@@ -91,7 +91,7 @@ async def test_demo(sessions):
     assert logged[1].startswith("✅ *Logged SGD 2.20*\nDining · kopi")
     undo = logged[2][0][0]
     await router.handle(Inbound("m-undo", TOMMY, "button", button_id=undo), transport)
-    assert transport.sent_text[-1] == (TOMMY, "Removed")
+    assert transport.sent_text[-1] == (TOMMY, "*Removed SGD 2.20 · Dining · kopi*")
 
     # 3, the receipt with the caption split becomes a bill to forward
     transport.media["photo"] = b"jpeg"

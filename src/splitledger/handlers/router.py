@@ -91,6 +91,8 @@ HINTS = {
 DASH_WORDS = frozenset({"dashboard", "overview", "summary"})
 # typed words that open the menu without asking the model
 MENU_WORDS = frozenset({"menu", "help", "options"})
+# typed words that offer to remove the last entry without asking the model
+UNDO_WORDS = frozenset({"undo", "oops", "delete", "remove"})
 
 
 # lowercase words in a message
@@ -265,6 +267,10 @@ class Router:
             return
         if words_in(text) and set(words_in(text)) <= MENU_WORDS:
             await self.menu(inbound, transport)
+            return
+        said = set(words_in(text))
+        if said & UNDO_WORDS and said <= UNDO_WORDS | {"last", "that", "it", "entry"}:
+            await self._logger.undo_last(inbound, transport)
             return
         if await self._currency.typed(inbound, text, transport):
             return

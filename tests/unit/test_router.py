@@ -86,6 +86,8 @@ PROTOCOL_ROWS = [
     (text("/help"), "help"),
     (text("/HELP"), "help"),
     (text("/undo"), "undo_last"),
+    (text("undo"), "undo_last"),
+    (text("Undo that"), "undo_last"),
     (text("/budget 600"), "help"),
     (text("CLAIM K7Q2"), "claim"),
     (text("claim k7q2 1,3"), "claim"),

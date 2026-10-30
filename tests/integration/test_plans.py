@@ -94,6 +94,8 @@ async def test_undo_frees_quota(sessions):
     logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL, book)
     await log(logger, transport, "lunch 50")
     await logger.undo_last(msg("text", "/undo"), transport)
+    entry_id = transport.sent_buttons[-1][2][0][0].removeprefix("undo:")
+    await logger.undo(msg("text", "yes"), entry_id, transport)
     after = await log(logger, transport, "coffee 1")
     assert after.endswith("*USD 310.53* left in Wants this week")
 
