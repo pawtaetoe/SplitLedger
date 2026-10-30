@@ -35,16 +35,20 @@ UNKNOWN = "*I can't find bill {}*\nCheck the code in the bill message, like _CLA
 NO_BILL = "*Which bill?*\nSend _CLAIM_ and the code from the bill message, like _CLAIM K7Q2AB_."
 NO_MATCH = "*I couldn't match that to the bill*\nReply with item numbers, like _CLAIM {} 1,3_."
 BAD_NUMBERS = "*Those numbers aren't on the bill*\nPick from 1 to {}."
-CHANGE = "*Tell me again*\nLike _Anna and Ben shared the calamari, I had the pasta_."
-DONE = "That's all you need to do. I'll message you when the bill closes."
+CHANGE = "*What should change?*\nJust say the fix, like _Ben had the pasta, not Anna_."
+DONE = (
+    "That's all you need to do. I'll message you when the bill closes.\n"
+    "Picked a wrong one? Reply like _remove 2_."
+)
 NOTHING = "Nothing to save. Send the bill code again, like _CLAIM K7Q2AB_."
 
 
-# one person's items said in words, name none is the sender
+# one person's items said in words, name none is the sender, with the words they used
 @dataclass(frozen=True)
 class Draft:
     bill: Bill
     claims: list[tuple[str | None, uuid.UUID, float]]
+    text: str = ""
 
 
 # an item name with how much of it, for the check message
@@ -68,6 +72,8 @@ class ClaimChat:
         self._book = book
         self._locale = locale
         self._drafts: dict[str, Draft] = {}
+        # drafts the user asked to change, read again with their fix
+        self._changing: dict[str, Draft] = {}
         # the bill each user last opened, so plain words know which bill
         self._context: dict[str, tuple[str, datetime]] = {}
 
@@ -126,6 +132,10 @@ class ClaimChat:
             await transport.send_text(inbound.user_id, NO_BILL)
             return
         self._remember(inbound.user_id, bill.code)
+        # a fix to a draft they asked to change is read with what they said first
+        earlier = self._changing.pop(inbound.user_id, None)
+        if earlier is not None and earlier.bill.id == bill.id:
+            text = f"{earlier.text}\nThen they corrected it: {text}"
         view = await self._view(bill, None)
         listing = "\n".join(
             f"{n}. {line.name}{f' x{line.qty}' if line.qty > 1 else ''}"
@@ -146,7 +156,7 @@ class ClaimChat:
             if not quiet:
                 await transport.send_text(inbound.user_id, NO_MATCH.format(bill.code))
             return
-        self._drafts[inbound.user_id] = Draft(bill, claims)
+        self._drafts[inbound.user_id] = Draft(bill, claims, text)
         await self._confirm(inbound, transport, view, claims)
 
     # item buttons, share buttons and the check buttons
@@ -168,9 +178,31 @@ class ClaimChat:
             await transport.send_text(inbound.user_id, NOTHING)
             return
         if parts[-1] != "ok":
+            self._changing[inbound.user_id] = draft
             await transport.send_text(inbound.user_id, CHANGE)
             return
         await self._save(inbound, transport, draft)
+
+    # remove 2, 6 drops those items from the sender's claims on the bill last opened
+    async def unclaim(self, inbound: Inbound, text: str, transport: Transport) -> None:
+        code = self._recent(inbound.user_id)
+        bill = await self._book.open_bill(code) if code else None
+        if bill is None:
+            await transport.send_text(inbound.user_id, NO_BILL)
+            return
+        view = await self._view(bill, await self._me(inbound, bill))
+        numbers = [int(n) for n in re.findall(r"\d+", text)]
+        if view.me is None:
+            return
+        if any(not 1 <= n <= len(view.lines) for n in numbers):
+            await transport.send_text(inbound.user_id, BAD_NUMBERS.format(len(view.lines)))
+            return
+        for n in dict.fromkeys(numbers):
+            error = await self._book.claim(bill.id, view.me.id, view.lines[n - 1].id, "drop")
+            if error:
+                await transport.send_text(inbound.user_id, error)
+                return
+        await self._summary(inbound, transport, bill, view.me.id, [])
 
     # remember which bill this user is claiming on
     def _remember(self, wa_user_id: str, code: str) -> None:

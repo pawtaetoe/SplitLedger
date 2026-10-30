@@ -347,6 +347,19 @@ async def test_bare_numbers_claim():
     assert claims.calls == ["numbers 2, 6", "numbers 1 and 3"]
 
 
+# remove and numbers take items back while a bill is open, else it is an undo
+async def test_remove_numbers_unclaim():
+    claims = fakes.FakeClaims()
+    logger = FakeLogger()
+    router = build(FakeLLM(), logger, claims=claims)
+    await router.handle(text("remove 2"), FakeTransport())
+    assert claims.calls == [] and logger.calls == ["undo_last"]
+    claims.open = True
+    await router.handle(text("remove 2"), FakeTransport())
+    await router.handle(text("not 1 and 3"), FakeTransport())
+    assert claims.calls == ["unclaim remove 2", "unclaim not 1 and 3"]
+
+
 # the button under a you owe message lists everything owed without the model
 async def test_owe_all_button():
     assistant = FakeAssistant()

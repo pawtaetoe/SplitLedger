@@ -127,6 +127,10 @@ async def test_no_match_and_change(sessions):
     assert transport.sent_text[-1][1] == claim_module.CHANGE
     async with sessions() as session:
         assert (await session.execute(select(ItemClaim))).first() is None
+    # the fix is read together with what they said first
+    await claims.free_text(text(PAYER, "the whole pasta"), "the whole pasta", transport)
+    prompt = claims._llm.structured_calls[-1]
+    assert prompt.endswith("Message: half a pasta\nThen they corrected it: the whole pasta")
 
 
 # a caption with no claims in it stays silent on the new bill
@@ -163,3 +167,19 @@ async def test_bare_numbers(sessions):
     await claims.numbers(text(ANNA, "1, 3", "Anna"), "1, 3", transport)
     async with sessions() as session:
         assert len((await session.execute(select(ItemClaim))).all()) == 2
+
+
+# remove and a number takes an item back off the sender's claims
+async def test_unclaim_in_chat(sessions):
+    await seed(sessions)
+    claims = chat(sessions)
+    transport = FakeTransport()
+    await claims.by_code(text(ANNA, "CLAIM K7Q2AB 2, 3", "Anna"), "CLAIM K7Q2AB 2, 3", transport)
+    await claims.unclaim(text(ANNA, "remove 9"), "remove 9", transport)
+    assert transport.sent_text[-1][1] == claim_module.BAD_NUMBERS.format(3)
+    await claims.unclaim(text(ANNA, "remove 3"), "remove 3", transport)
+    body = transport.sent_text[-1][1]
+    assert body.startswith("*Your share so far · SGD ") and "- Pasta" in body
+    assert "Calamari" not in body.split("\n\n")[0]
+    async with sessions() as session:
+        assert len((await session.execute(select(ItemClaim))).all()) == 1

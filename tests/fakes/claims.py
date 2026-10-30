@@ -28,6 +28,10 @@ class FakeClaims:
     def has_bill(self, wa_user_id: str) -> bool:
         return self.open
 
+    # record numbers taken back
+    async def unclaim(self, inbound: Inbound, text: str, transport: Transport) -> None:
+        self.calls.append(f"unclaim {text}")
+
     # record bare numbers
     async def numbers(self, inbound: Inbound, text: str, transport: Transport) -> None:
         self.calls.append(f"numbers {text}")

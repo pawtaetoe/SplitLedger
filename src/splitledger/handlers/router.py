@@ -54,6 +54,10 @@ QUESTION_WORDS = frozenset(
 CLOSE = re.compile(r"^(close|finish|finalise|finalize)\s+(the\s+|my\s+)?bill\b", re.IGNORECASE)
 # item numbers like 2, 6 or 1 and 3
 NUMBER_LIST = re.compile(r"^\d{1,2}(?:\s*(?:,|&|and|\s)\s*\d{1,2})*$", re.IGNORECASE)
+# taking items back off a claim, like remove 2 or not 3 and 5
+UNCLAIM = re.compile(
+    r"^(?:remove|drop|unclaim|not)\s+\d{1,2}(?:\s*(?:,|&|and|\s)\s*\d{1,2})*$", re.IGNORECASE
+)
 # a caption longer than this may say who had what
 CAPTION_WORDS = 3
 # a head count in a split like 4 ways or 4 pax
@@ -270,6 +274,9 @@ class Router:
             return
         if words_in(text) and set(words_in(text)) <= MENU_WORDS:
             await self.menu(inbound, transport)
+            return
+        if UNCLAIM.match(text) and self._claims.has_bill(inbound.user_id):
+            await self._claims.unclaim(inbound, text, transport)
             return
         said = set(words_in(text))
         if said & UNDO_WORDS and said <= UNDO_WORDS | {"last", "that", "it", "entry"}:
