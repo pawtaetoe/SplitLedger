@@ -7,8 +7,9 @@ BUTTON_CHARS = 20
 ROW_CHARS = 24
 
 
-# a label cut to fit, an ellipsis shows it was cut
-def fit(label: str, limit: int) -> str:
+# a button or list row label cut to fit, an ellipsis shows it was cut
+def fit(label: str, row: bool = False) -> str:
+    limit = ROW_CHARS if row else BUTTON_CHARS
     return label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
 
 

@@ -12,10 +12,9 @@ from splitledger.split.tokens import ClaimTokens, LoginLinks
 from splitledger.web.dashboard import COOKIE, DashboardPage
 from splitledger.web.plan import PlanForm, PlanPage
 from tests.fakes import FakeLLM, FakeTransport
-from tests.integration.test_plans import msg
+from tests.integration.test_plans import ME, msg
 
 TOKENS = ClaimTokens("secret")
-ME = "6581234567"
 
 
 # a request carrying a signed in cookie for this user

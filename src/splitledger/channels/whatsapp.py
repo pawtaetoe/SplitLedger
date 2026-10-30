@@ -9,9 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.exc import IntegrityError
 
-from splitledger.channels.layout import (
-    BUTTON_CHARS, ROW_CHARS, fit, split_choice, with_descriptions
-)
+from splitledger.channels.layout import fit, split_choice, with_descriptions
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import ProcessedMessage
@@ -108,7 +106,7 @@ class WhatsAppTransport:
         choices = [(button_id, *split_choice(title)) for button_id, title in buttons]
         action: dict[str, Any] = {
             "buttons": [
-                {"type": "reply", "reply": {"id": button_id, "title": fit(label, BUTTON_CHARS)}}
+                {"type": "reply", "reply": {"id": button_id, "title": fit(label)}}
                 for button_id, label, _ in choices
             ]
         }
@@ -118,7 +116,7 @@ class WhatsAppTransport:
         if len(buttons) > 3:
             rows = [
                 {
-                    "id": button_id, "title": fit(label, ROW_CHARS),
+                    "id": button_id, "title": fit(label, row=True),
                     **({"description": desc} if desc else {})
                 }
                 for button_id, label, desc in choices
@@ -136,7 +134,7 @@ class WhatsAppTransport:
 
     # send text with one link button, meta allows it inside the 24 hour window
     async def send_link(self, to: str, text: str, label: str, url: str) -> None:
-        display = fit(label, BUTTON_CHARS)
+        display = fit(label)
         action = {"name": "cta_url", "parameters": {"display_text": display, "url": url}}
         payload = {
             "messaging_product": "whatsapp",

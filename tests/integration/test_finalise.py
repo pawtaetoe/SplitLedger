@@ -103,7 +103,7 @@ async def test_close_by_buttons(sessions):
     assert ask.startswith("*Nobody claimed Pasta, Calamari*")
     rest = buttons[1][0]
     await group.on_button(Inbound("m3", PAYER, "button", button_id=rest), rest, transport)
-    payer_text = transport.sent_text[-1]
+    payer_text = transport.sent_links[-1]
     assert payer_text[0] == PAYER
     assert payer_text[1].startswith("*Bill closed · Bill*\nYou paid SGD 70.00.")
     assert "- Anna *SGD 24.14*" in payer_text[1]
@@ -129,7 +129,8 @@ async def test_closes_when_all_claimed(sessions):
     assert transport.sent_text == []
     assert await group.nudge(transport, now + timedelta(minutes=5)) == 0
     assert await group.nudge(transport, now + timedelta(minutes=16)) == 1
-    sent = dict(transport.sent_text) | {to: body for to, body, _ in transport.sent_buttons[1:]}
+    sent = {to: body for to, body, _, _ in transport.sent_links}
+    sent |= {to: body for to, body, _ in transport.sent_buttons[1:]}
     assert sent[PAYER].startswith("*Bill closed · Bill*\nEveryone has claimed, so I closed it.")
     assert sent[ANNA].startswith("*You owe Tommy SGD 24.14*")
     assert await group.nudge(transport, now + timedelta(minutes=30)) == 0

@@ -102,4 +102,4 @@ async def test_payer_closes_on_the_page(sessions):
     async with sessions() as session:
         stored = await session.get(Bill, bill.id)
     assert stored is not None and stored.status == BillStatus.FINALISED
-    assert transport.sent_text[-1][0] == payer.wa_user_id
+    assert transport.sent_links[-1][0] == payer.wa_user_id
