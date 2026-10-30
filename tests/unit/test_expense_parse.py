@@ -73,6 +73,8 @@ def test_extend_merges_words():
 def test_money():
     assert money(650, "SGD") == "SGD 6.50"
     assert money(100000, "JPY") == "JPY 1,000.00"
+    assert money(-50, "SGD") == "SGD -0.50"
+    assert money(-123456, "USD") == "USD -1,234.56"
 
 
 # notes keep what was bought and drop the amount, money words and stray punctuation

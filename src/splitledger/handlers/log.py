@@ -129,7 +129,8 @@ async def ensure_user(
 
 # money for a reply line, the code reads clearly in any country
 def money(cents: int, currency: str) -> str:
-    return f"{currency} {cents // 100:,}.{cents % 100:02d}"
+    sign, cents = ("-", -cents) if cents < 0 else ("", cents)
+    return f"{currency} {sign}{cents // 100:,}.{cents % 100:02d}"
 
 
 # one entry for a reply line, like USD 4.50 · Dining · coffee

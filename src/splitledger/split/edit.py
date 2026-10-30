@@ -16,7 +16,8 @@ CLOSED = "This bill is closed, so it can't change now."
 STARTED = "Friends have started claiming, so the items can't change now."
 NO_LINES = "Keep at least one line with a name and a price."
 BAD_PRICE = "Check the price for {}, like 12.50."
-BAD_CHARGES = "Check service, tax and discounts, like 8.80 or 0."
+BAD_CHARGES = "Check service, tax and discounts, like 8.80, or -5.00 for a discount."
+TOO_MUCH_OFF = "The discount can't be more than the items."
 TOO_MANY = f"A bill can have up to {MAX_LINES} lines."
 
 
@@ -35,6 +36,15 @@ def cents_of(text: str) -> int | None:
         return None
     whole, part = found.group(1), (found.group(2) or "0").ljust(2, "0")
     return int(whole) * 100 + int(part)
+
+
+# cents for service, tax and discounts, negative when the discount is bigger
+def charges_of(text: str) -> int | None:
+    text = text.strip()
+    if text.startswith("-"):
+        found = cents_of(text.removeprefix("-"))
+        return -found if found is not None else None
+    return cents_of(text)
 
 
 # whether the text is an item id from the form
@@ -71,7 +81,7 @@ class BillEditor:
         if any(row.item and not is_id(row.item) for row in kept):
             return NO_LINES
         prices = [cents_of(row.price) for row in kept]
-        extra = cents_of(charges) if charges.strip() else 0
+        extra = charges_of(charges) if charges.strip() else 0
         if not kept:
             return NO_LINES
         # name the first line that can't be read so the payer knows what to fix
@@ -80,6 +90,8 @@ class BillEditor:
             return BAD_PRICE.format(bad[0])
         if extra is None:
             return BAD_CHARGES
+        if sum(price or 0 for price in prices) + extra <= 0:
+            return TOO_MUCH_OFF
         if len(kept) > MAX_LINES:
             return TOO_MANY
         async with self._sessions() as session:
@@ -105,7 +117,8 @@ class BillEditor:
                 await session.execute(delete(BillItem).where(BillItem.id.in_(gone)))
             bill.vendor = vendor.strip()[:60] or None
             bill.subtotal = sum(price or 0 for price in prices)
-            bill.service, bill.tax, bill.discount = extra, 0, 0
+            # one net figure, kept as a discount when it takes money off
+            bill.service, bill.tax, bill.discount = max(extra, 0), 0, max(-extra, 0)
             bill.total = bill.subtotal + extra
             await session.commit()
         return None

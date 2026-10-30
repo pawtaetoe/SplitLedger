@@ -5,6 +5,7 @@ from sqlalchemy import select
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import Bill, BillItem, User
 from splitledger.handlers import bill as bill_module
+from splitledger.split import edit as edit_module
 from splitledger.split.claims import ClaimBook
 from splitledger.split.edit import BAD_CHARGES, BAD_PRICE, NOT_YOURS, STARTED, BillEditor, Row
 from splitledger.split.tokens import ClaimTokens
@@ -34,6 +35,19 @@ async def test_bad_price_named(sessions):
     async with sessions() as session:
         names = (await session.execute(select(BillItem.name))).scalars().all()
     assert "Tea" not in names
+
+
+# a discount bigger than the charges saves as a discount, never more than the items
+async def test_net_discount(sessions):
+    bill, _, me = await misread(sessions)
+    editor = BillEditor(sessions)
+    rows = [Row("", "Tea", "20")]
+    assert await editor.save(bill.code, me.id, "", rows, "-25") == edit_module.TOO_MUCH_OFF
+    assert await editor.save(bill.code, me.id, "", rows, "-5.50") is None
+    async with sessions() as session:
+        saved = await session.get(Bill, bill.id)
+    assert saved is not None
+    assert (saved.service, saved.discount, saved.total) == (0, 550, 1450)
 
 
 # fix the items sends the payer a link that opens this bill for them only

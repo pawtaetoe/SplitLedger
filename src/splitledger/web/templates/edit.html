@@ -15,7 +15,7 @@
 </style>
 </head>
 <body>
-{% macro cents(c) %}{{ "%d.%02d"|format(c // 100, c % 100) }}{% endmacro %}
+{% macro cents(c) %}{{ "-" if c < 0 }}{{ "%d.%02d"|format((c|abs) // 100, (c|abs) % 100) }}{% endmacro %}
 {% macro row(id, name, price) %}
 <li class="line-row">
   <input type="hidden" name="item" value="{{ id }}">
@@ -40,7 +40,7 @@
     <button type="button" id="add">+ Add a line</button>
     <h2>Service, tax and discounts</h2>
     <input type="text" name="charges" value="{{ cents(bill.service + bill.tax - bill.discount) }}" inputmode="decimal" aria-label="Service, tax and discounts">
-    <p class="note">Leave 0.00 if the prices already include them.</p>
+    <p class="note">Leave 0.00 if the prices already include them. Put a minus in front for a discount, like -5.00.</p>
     <p id="check" class="error" role="alert" hidden></p>
     <div class="total" aria-live="polite">
       <div class="grow">New total<br><strong id="sum">{{ bill.currency }} {{ cents(bill.total) }}</strong></div>
@@ -58,7 +58,14 @@
     const found = (text || "").trim().replace(/^\$/, "").match(/^(\d{1,7})(?:[.,](\d{1,2}))?$/);
     return found ? Number(found[1]) * 100 + Number((found[2] || "0").padEnd(2, "0")) : null;
   };
-  const shown = (c) => "{{ bill.currency }} " + Math.floor(c / 100) + "." + String(c % 100).padStart(2, "0");
+  // a charge may start with a minus for a discount
+  const charge = (text) => {
+    const trimmed = (text || "").trim();
+    const value = cents(trimmed.replace(/^-/, ""));
+    return value !== null && trimmed.startsWith("-") ? -value : value;
+  };
+  const shown = (c) => "{{ bill.currency }} " + (c < 0 ? "-" : "") + Math.floor(Math.abs(c) / 100) + "."
+    + String(Math.abs(c) % 100).padStart(2, "0");
   // mark a box that can't be read, true when it can
   const mark = (input, ok) => {
     input.setAttribute("aria-invalid", ok ? "false" : "true");
@@ -66,7 +73,7 @@
   };
   const total = () => {
     const bad = [];
-    const extra = form.charges.value.trim() ? cents(form.charges.value) : 0;
+    const extra = form.charges.value.trim() ? charge(form.charges.value) : 0;
     if (!mark(form.charges, extra !== null)) bad.push("service, tax and discounts");
     let sum = extra || 0;
     form.querySelectorAll(".line-row").forEach((li) => {
