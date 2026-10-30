@@ -127,10 +127,10 @@ def forward_text(bill: Bill, items: list[BillItem], chat_url: str) -> str:
     ]
     charges = bill.service + bill.tax - bill.discount
     extra = f"\nService, tax and discounts: {money(charges, c)}" if charges else ""
+    # the link goes first so a long list can't hide it behind read more
     return (
-        f"{title}\nTap the link, send the message, then reply with the numbers you had.\n\n"
-        + "\n".join(lines) + extra
-        + f"\n\n*Claim in WhatsApp*\n{chat_url}"
+        f"{title}\nTap the link, send the message, then reply with the numbers you had.\n"
+        f"{chat_url}\n\n" + "\n".join(lines) + extra
     )
 
 

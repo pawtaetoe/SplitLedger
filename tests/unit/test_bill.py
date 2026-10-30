@@ -55,7 +55,9 @@ def test_forward_text():
     assert text.startswith("*Jumbo · SGD 118.80*\n")
     assert "1. Grilled salmon · SGD 80.00\n2. Beer x2 · SGD 20.00" in text
     assert "Service, tax and discounts: SGD 18.80" in text
-    assert text.endswith("*Claim in WhatsApp*\nhttps://wa.me/1?text=CLAIM%20K7Q2AB")
+    # the link comes before the items so read more can't hide it
+    link = text.index("https://wa.me/1?text=CLAIM%20K7Q2AB")
+    assert link < text.index("1. Grilled salmon")
     assert "See the bill" not in text
 
 

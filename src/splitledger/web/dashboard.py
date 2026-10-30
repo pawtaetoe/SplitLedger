@@ -24,6 +24,9 @@ from splitledger.web.claim import render
 LOG = logging.getLogger(__name__)
 # pages a link button may open, the first part of the path
 LINK_PAGES = frozenset({"b", "c", "d", "e"})
+# set once the add to home screen tip has been shown, so it shows once per phone
+TIP_COOKIE = "sl_tip"
+TIP_DAYS = 365
 # the dashboard tabs, key and label
 # split receipts are shared bills, rent and the like are upcoming bills
 TABS = {"overview": "Overview", "bills": "Shared", "spending": "Spending", "coming": "Upcoming"}
@@ -116,10 +119,18 @@ class DashboardPage:
             str(b.user): self._rails.offer(b.wa, -b.cents, b.currency, "SplitLedger").label
             for b in board.people() if b.cents < 0 and b.user and b.wa
         }
-        return render(
+        tab = tab if tab in TABS else "overview"
+        tip = tab == "overview" and TIP_COOKIE not in request.cookies
+        response = render(
             "dashboard.html", board=board, links=links, tz=ZoneInfo(board.user.timezone),
-            tab=tab if tab in TABS else "overview", tabs=TABS, pay=pay, paid=paid
+            tab=tab, tabs=TABS, pay=pay, paid=paid, tip=tip
         )
+        if tip:
+            response.set_cookie(
+                TIP_COOKIE, "1", max_age=TIP_DAYS * 86400, httponly=True, samesite="lax",
+                secure=self._secure
+            )
+        return response
 
     # i've paid from the page, the same as the chat button, both people get a message
     async def paid(self, request: Request, to: str, currency: str) -> Response:
