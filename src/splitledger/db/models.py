@@ -186,6 +186,8 @@ class Bill(Base):
     nudged_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     # when anyone last claimed, joined or changed a claim, for the quiet period before closing
     claimed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # the last claim the payer has been told about
+    reported_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 # one line on a bill

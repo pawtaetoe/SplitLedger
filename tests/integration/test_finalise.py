@@ -136,6 +136,31 @@ async def test_closes_when_all_claimed(sessions):
     assert await group.nudge(transport, now + timedelta(minutes=30)) == 0
 
 
+# the payer hears how claiming is going once claims go quiet, once per batch of claims
+async def test_progress_after_quiet_claims(sessions):
+    bill, items, _ = await seed(sessions)
+    book = ClaimBook(sessions)
+    anna = await book.join(bill.id, "Anna")
+    await book.claim(bill.id, anna, items[0].id, "mine")
+    logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL)
+    group = GroupBills(sessions, logger, GLOBAL, ClaimTokens("s"), "https://sl.test", "1")
+    transport = FakeTransport()
+    now = datetime.now(UTC)
+    assert await group.nudge(transport, now) == 0
+    assert await group.nudge(transport, now + timedelta(minutes=4)) == 1
+    to, text, buttons = transport.sent_buttons[-1]
+    assert to == PAYER
+    assert text.startswith("*Your bill · 1 of 3 items claimed*\nJoined so far: Anna.")
+    assert buttons == [(f"bill:close:{bill.code}", "Close the bill")]
+    assert await group.nudge(transport, now + timedelta(minutes=8)) == 0
+    ben = await book.join(bill.id, "Ben")
+    await book.claim(bill.id, ben, items[1].id, "mine")
+    later = datetime.now(UTC) + timedelta(minutes=4)
+    assert await group.nudge(transport, later) == 1
+    assert "2 of 3 items claimed" in transport.sent_buttons[-1][1]
+    assert "Anna, Ben" in transport.sent_buttons[-1][1]
+
+
 # a bill left half claimed for a day gets one reminder saying what is missing
 async def test_nudge_after_a_day(sessions):
     bill, items, _ = await seed(sessions)

@@ -99,6 +99,12 @@ STILL_OPEN = (
 )
 # hours before an open bill that isn't fully claimed gets one reminder
 NUDGE_HOURS = 24
+# minutes with no claim changes before the payer hears how claiming is going
+PROGRESS_MINUTES = 3
+PROGRESS = (
+    "*{} · {}*\nJoined so far: {}.\n"
+    "It closes by itself once everyone's in, or close it now."
+)
 NO_TOTAL = "*I couldn't read the total*\nTry a flat, well lit photo of the whole receipt."
 NO_BILL = (
     "*Which bill?*\nSend the receipt photo with the caption _split {} ways_ "
@@ -384,18 +390,22 @@ class GroupBills:
         async with self._sessions() as session:
             rows = (await session.execute(query)).all()
             for bill, payer_wa in rows:
-                done, text = await self._state(session, bill, now)
+                done, text, progress = await self._state(session, bill, now)
                 if done:
                     ready.append((bill, payer_wa))
                     continue
-                if text is None or bill.nudged_at is not None:
+                # progress may repeat as claims come in, the other nudges go once
+                if text is None or (not progress and bill.nudged_at is not None):
                     continue
                 try:
                     await transport.send_buttons(payer_wa, text, close_button(bill))
                 except Exception as error:
                     LOG.warning("close nudge failed with %s", type(error).__name__)
                     continue
-                bill.nudged_at = now
+                if not progress:
+                    bill.nudged_at = now
+                # claims up to here are told, so only newer ones bring another update
+                bill.reported_at = bill.claimed_at or now
                 sent += 1
             await session.commit()
         for bill, payer_wa in ready:
@@ -405,10 +415,11 @@ class GroupBills:
                 sent += 1
         return sent
 
-    # whether to close now, and what to tell the payer: everyone's in, or left open a day
+    # whether to close now, what to tell the payer and whether it is a progress update
+    # everyone's in, new claims gone quiet, or left open a day
     async def _state(
         self, session: AsyncSession, bill: Bill, now: datetime
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str | None, bool]:
         people = (await session.execute(
             select(func.count()).where(Participant.bill_id == bill.id)
         )).scalar_one()
@@ -425,14 +436,33 @@ class GroupBills:
         )
         quiet = bill.claimed_at is None or now - bill.claimed_at >= timedelta(minutes=QUIET_MINUTES)
         if everyone:
-            return quiet, None if quiet else ALL_IN.format(bill.vendor or "Your bill")
-        if now - bill.created_at < timedelta(hours=NUDGE_HOURS) or people < 2:
-            return False, None
-        left = (
-            f"{people} of {bill.even_ways} people have joined." if bill.even_ways
-            else f"{total - claimed} of {total} items are still unclaimed."
-        )
-        return False, STILL_OPEN.format(bill.vendor or "Your bill", left)
+            return quiet, None if quiet else ALL_IN.format(bill.vendor or "Your bill"), False
+        if people < 2:
+            return False, None, False
+        name = bill.vendor or "Your bill"
+        if now - bill.created_at >= timedelta(hours=NUDGE_HOURS) and bill.nudged_at is None:
+            left = (
+                f"{people} of {bill.even_ways} people have joined." if bill.even_ways
+                else f"{total - claimed} of {total} items are still unclaimed."
+            )
+            return False, STILL_OPEN.format(name, left), False
+        last = bill.claimed_at
+        unreported = last is not None and (bill.reported_at is None or last > bill.reported_at)
+        if last is not None and unreported and now - last >= timedelta(minutes=PROGRESS_MINUTES):
+            done = (
+                f"{people} of {bill.even_ways} people have joined" if bill.even_ways
+                else f"{claimed} of {total} items claimed"
+            )
+            joined = (await session.execute(
+                select(Participant.guest_name)
+                .where(
+                    Participant.bill_id == bill.id,
+                    Participant.user_id.is_distinct_from(bill.payer_id)
+                )
+                .order_by(Participant.guest_name)
+            )).scalars().all()
+            return False, PROGRESS.format(name, done, ", ".join(joined) or "nobody yet"), True
+        return False, None, False
 
     # close from the web page: only the payer, leftovers come back as names to ask about
     async def close_for(
