@@ -6,7 +6,7 @@ import splitledger.handlers.router as router_module
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import Bill, LedgerSource
 from splitledger.handlers.router import HELP, UNCLEAR, MessageReader, Router
-from splitledger.llm.schemas import ExpenseDraft, MessageResult
+from splitledger.llm.schemas import ExpenseDraft, MessageResult, ReceiptDraft
 from splitledger.llm.schemas_sg import SG
 from tests import fakes
 from tests.fakes import FakeAssistant, FakeBills, FakeLLM, FakeLogger, FakePlans, FakeTransport
@@ -91,6 +91,7 @@ PROTOCOL_ROWS = [
     (text("claim k7q2 1,3"), "claim"),
     (button("undo:abc"), "undo"),
     (button("receipt:k1"), "confirm_receipt"),
+    (button("split:abc:k1"), "split_instead"),
     (text("menu"), "help"),
     (text("Help"), "help"),
     (button("save"), "echo"),
@@ -361,3 +362,13 @@ async def test_currency_routes():
     await router.handle(text("currency jpy"), FakeTransport())
     assert currency.calls == ["ask", "button cur:EUR", "typed currency jpy"]
     assert llm.structured_calls == []
+
+
+# split it instead hands the logged receipt to the group bill, asking how to split
+async def test_split_instead_asks_how():
+    logger = FakeLogger()
+    logger.split_receipt = ReceiptDraft(total_cents=3000)
+    group = fakes.FakeGroup()
+    await build(FakeLLM(), logger, group=group).handle(button("split:abc:k1"), FakeTransport())
+    assert logger.calls == ["split_instead"]
+    assert group.calls == ["draft None unsure"]

@@ -25,6 +25,8 @@ RECEIPT_PROMPT = f"parse_receipt: {(PROMPTS / 'parse_receipt.md').read_text(enco
 TOLERANCE = 5
 MAX_VOICE_SECONDS = 60
 MAX_VOICE_BYTES = 1_000_000
+RESEND = "*Removed from your spending*\nSend the photo again with the caption _split_."
+SPLIT_GONE = "*That receipt is already removed or split*"
 # optional currency symbol then an amount with up to two decimals
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 
@@ -224,12 +226,14 @@ class ExpenseLogger:
             category=receipt.category,
             vendor=receipt.vendor
         )
-        await self._save(inbound, transport, draft, receipt.total_cents or 0, LedgerSource.RECEIPT)
+        await self._save(
+            inbound, transport, draft, receipt.total_cents or 0, LedgerSource.RECEIPT, key
+        )
 
-    # write one expense row and offer undo
+    # write one expense row and offer undo, a receipt key also offers to split it
     async def _save(
         self, inbound: Inbound, transport: Transport, draft: ExpenseDraft, amount: int,
-        source: LedgerSource
+        source: LedgerSource, key: str | None = None
     ) -> None:
         async with self._sessions() as session:
             user_id = await self._user_id(session, inbound.user_id)
@@ -254,16 +258,37 @@ class ExpenseLogger:
         lines = await self._book.after_save(user_id, draft.category) if self._book else []
         if lines:
             text = text + "\n\n" + "\n".join(lines)
-        await transport.send_buttons(inbound.user_id, text, [(f"undo:{entry.id}", "Undo")])
+        buttons = [(f"undo:{entry.id}", "Undo")]
+        if key:
+            buttons.append((f"split:{entry.id}:{key}", "Split it instead"))
+        await transport.send_buttons(inbound.user_id, text, buttons)
 
     # void one entry the sender owns, repeat taps change nothing
     async def undo(self, inbound: Inbound, entry_id: str, transport: Transport) -> None:
+        voided = await self._void(inbound.user_id, entry_id)
+        await transport.send_text(inbound.user_id, "Removed" if voided else "Nothing to undo")
+
+    # void a logged receipt and hand it back to split, none when it cannot be split here
+    async def split_instead(
+        self, inbound: Inbound, entry_id: str, key: str, transport: Transport
+    ) -> ReceiptDraft | None:
+        if not await self._void(inbound.user_id, entry_id):
+            await transport.send_text(inbound.user_id, SPLIT_GONE)
+            return None
+        # the same photo can be logged again later
+        self._logged.discard((inbound.user_id, key))
+        receipt = self._receipts.get(key)
+        if receipt is None:
+            await transport.send_text(inbound.user_id, RESEND)
+        return receipt
+
+    # void one entry the sender owns, true only when this call voided it
+    async def _void(self, wa_user_id: str, entry_id: str) -> bool:
         try:
             target = uuid.UUID(entry_id)
         except ValueError:
-            await transport.send_text(inbound.user_id, "Nothing to undo")
-            return
-        owner = select(User.id).where(User.wa_user_id == inbound.user_id).scalar_subquery()
+            return False
+        owner = select(User.id).where(User.wa_user_id == wa_user_id).scalar_subquery()
         query = (
             update(LedgerEntry)
             .where(
@@ -278,7 +303,7 @@ class ExpenseLogger:
         async with self._sessions() as session:
             voided = (await session.execute(query)).scalar_one_or_none()
             await session.commit()
-        await transport.send_text(inbound.user_id, "Removed" if voided else "Nothing to undo")
+        return voided is not None
 
     # void the latest expense the sender logged themselves
     async def undo_last(self, inbound: Inbound, transport: Transport) -> None:

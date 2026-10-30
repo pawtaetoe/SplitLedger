@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, User
-from splitledger.handlers.log import ExpenseLogger, quick_parse
+from splitledger.handlers.log import SPLIT_GONE, ExpenseLogger, quick_parse
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
 from tests.fakes import FakeLLM, FakeTransport
 from tests.fakes.router import fake_router
@@ -124,6 +124,25 @@ async def test_confirmed_receipt_saved(sessions):
     key = transport.sent_buttons[0][2][0][0].removeprefix("receipt:")
     await logger.confirm_receipt(text("14155550100", "1"), key, transport)
     assert await count(sessions, LedgerEntry) == 1
+
+
+# a logged receipt can be split instead once, which removes it from spending
+async def test_receipt_split_instead(sessions):
+    receipt = ReceiptDraft(total_cents=1500, category="Dining")
+    transport = FakeTransport()
+    transport.media["photo-1"] = b"jpeg-bytes"
+    logger = ExpenseLogger(FakeLLM({"parse_receipt": receipt}), sessions, GLOBAL)
+    await logger.log_receipt(Inbound("m1", "14155550100", "image", media_ref="photo-1"), transport)
+    undo, split = transport.sent_buttons[0][2]
+    assert undo[0].startswith("undo:") and split[1] == "Split it instead"
+    entry_id, _, key = split[0].removeprefix("split:").partition(":")
+    tap = text("14155550100", "2")
+    assert await logger.split_instead(tap, entry_id, key, transport) == receipt
+    async with sessions() as session:
+        voided = (await session.execute(select(LedgerEntry.voided_at))).scalar_one()
+    assert voided is not None
+    assert await logger.split_instead(tap, entry_id, key, transport) is None
+    assert transport.sent_text == [("14155550100", SPLIT_GONE)]
 
 
 # undo last voids the newest entry first and then the one before

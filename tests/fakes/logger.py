@@ -1,7 +1,7 @@
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerSource
-from splitledger.llm.schemas import ExpenseDraft
+from splitledger.llm.schemas import ExpenseDraft, ReceiptDraft
 
 
 # logger fake that echoes text and images and records every call
@@ -13,6 +13,8 @@ class FakeLogger:
         self.calls: list[str] = []
         self.drafts: list[tuple[ExpenseDraft, LedgerSource]] = []
         self.heard: str | None = None
+        # what split_instead hands back, a receipt or none
+        self.split_receipt: ReceiptDraft | None = None
 
     # echo the text back
     async def log(
@@ -38,6 +40,13 @@ class FakeLogger:
     async def transcribe(self, inbound: Inbound, transport: Transport) -> str | None:
         self.calls.append("transcribe")
         return self.heard
+
+    # record a split of a logged receipt and hand back the canned receipt
+    async def split_instead(
+        self, inbound: Inbound, entry_id: str, key: str, transport: Transport
+    ) -> ReceiptDraft | None:
+        self.calls.append("split_instead")
+        return self.split_receipt
 
     # record the confirmed receipt key
     async def confirm_receipt(self, inbound: Inbound, key: str, transport: Transport) -> None:

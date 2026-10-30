@@ -205,6 +205,13 @@ class GroupBills:
             return None
         image = await transport.fetch_media(inbound.media_ref or "")
         receipt = await self._logger.read_receipt(image)
+        return await self.from_draft(inbound, transport, receipt, ways, unsure)
+
+    # check a receipt already read can be split, save the bill and send the forwardable message
+    async def from_draft(
+        self, inbound: Inbound, transport: Transport, receipt: ReceiptDraft,
+        ways: int | None = None, unsure: bool = False
+    ) -> Bill | None:
         # an even split only needs the total, a split by item needs lines that add up
         problem = NO_TOTAL if not receipt.total_cents else None
         by_item = bool(receipt.items) and receipt_adds_up(receipt)

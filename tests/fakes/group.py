@@ -18,6 +18,14 @@ class FakeGroup:
         self.calls.append(f"split {ways}" + (" unsure" if unsure else ""))
         return self.bill
 
+    # record a split of a receipt already read
+    async def from_draft(
+        self, inbound: Inbound, transport: Transport, receipt: object, ways: int | None = None,
+        unsure: bool = False
+    ) -> object:
+        self.calls.append(f"draft {ways}" + (" unsure" if unsure else ""))
+        return self.bill
+
     # record an even split of the latest bill
     async def split_evenly(self, inbound: Inbound, transport: Transport, ways: int) -> None:
         self.calls.append(f"even {ways}")

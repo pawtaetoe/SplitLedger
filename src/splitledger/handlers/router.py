@@ -217,6 +217,13 @@ class Router:
         if button_id.startswith("undo:"):
             await self._logger.undo(inbound, button_id.removeprefix("undo:"), transport)
             return
+        if button_id.startswith("split:"):
+            entry_id, _, key = button_id.removeprefix("split:").partition(":")
+            receipt = await self._logger.split_instead(inbound, entry_id, key, transport)
+            if receipt is not None:
+                # no caption said how, so ask by item or evenly
+                await self._group.from_draft(inbound, transport, receipt, unsure=True)
+            return
         if button_id.startswith("receipt:"):
             key = button_id.removeprefix("receipt:")
             await self._logger.confirm_receipt(inbound, key, transport)
