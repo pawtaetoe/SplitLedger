@@ -24,7 +24,7 @@ Built for the Meta Global AI Developer Hackathon (Indie track)
 | `can I afford a 300 hotel?` | spent, still due, really left, a rule of thumb |
 | `menu` | every action as a tap choice, including My dashboard and Main currency |
 | `currency JPY` | your main currency changes; it starts as your phone's country currency |
-| tap **See it all** under Bill closed, You owe or Plan saved | your dashboard, signed in for 30 days, can be added to the home screen |
+| tap **My dashboard** under Bill closed, You owe or Plan saved | your dashboard, signed in for 30 days, can be added to the home screen |
 
 ## Which Meta model does what
 

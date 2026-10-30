@@ -148,7 +148,7 @@ async def test_code_sends_bill_link(sessions):
         text(ANNA, "CLAIM K7Q2AB", "Anna"), "CLAIM K7Q2AB", transport
     )
     assert links.bills == ["K7Q2AB"]
-    page = "Or tick them on a page:\nhttps://sl.test/b/K7Q2AB/token"
+    page = "Or tick them on the web:\nhttps://sl.test/b/K7Q2AB/token"
     assert transport.sent_buttons[-1][1].endswith(page)
 
 

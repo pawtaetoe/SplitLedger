@@ -123,7 +123,7 @@ class PlanManager:
         name = preset.name if preset else "Your own plan"
         text = f"*Your plan: {name}*\nThis {report.unit()}:\n" + "\n".join(parts)
         buttons = [
-            ("plan:change", "Change"), ("plan:web", "Change on a page"), ("plan:remove", "Remove")
+            ("plan:change", "Change"), ("plan:web", "Edit on the web"), ("plan:remove", "Remove")
         ]
         await transport.send_buttons(inbound.user_id, text, buttons)
 
@@ -181,7 +181,7 @@ class PlanManager:
         if action == "more":
             sixty = PRESETS["60"]
             buttons = [(f"plan:fw:{sixty.key}", f"{sixty.name} — {sixty.blurb}"), OWN]
-            on_page = ("plan:web", "Set up on a page — every choice on one screen")
+            on_page = ("plan:web", "Set up on the web — every choice on one screen")
             await transport.send_buttons(user, "*More choices*", [*buttons, on_page])
             return
         if action == "fw:custom":
@@ -291,7 +291,7 @@ class PlanManager:
             for name, quota, _ in plan_amounts(framework, draft.take_home_cents, draft.period)
         ]
         credit = f"_Based on {framework.source}_" if framework.source else (
-            "_Your own plan, drafted with Muse Spark_"
+            "_Your own plan, drafted from your words_"
         )
         lines = [
             f"*{framework.name}*",

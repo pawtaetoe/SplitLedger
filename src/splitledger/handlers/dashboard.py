@@ -22,12 +22,12 @@ BILL_LINK = (
 )
 WARNING = "_The button works for 15 minutes. Please don't forward it._"
 # the label on buttons that open the dashboard
-SEE_ALL = "See it all"
+SEE_ALL = "My dashboard"
 # what each page is called, what it is for and its button
 PAGES = {
     "me": (
         "Your dashboard", "Who owes whom, shared bills, this month and upcoming bills.",
-        "Open dashboard"
+        SEE_ALL
     ),
     "plan": (
         "Set up your plan", "Every choice on one screen, with the amounts as you go.",

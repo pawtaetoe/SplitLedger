@@ -139,7 +139,7 @@ async def test_own_plan_with_a_limit(sessions):
     assert "- Food: *USD 400.00*\n- Savings: *USD 1,350.00*" in confirm
     untracked = "transport, shopping, bills, entertainment, health, travel, other"
     assert f"_Not tracked: {untracked}._" in confirm
-    assert "_Your own plan, drafted with Muse Spark_" in confirm
+    assert "_Your own plan, drafted from your words_" in confirm
     await plans.on_button(msg("button", "plan:save"), "plan:save", transport)
     logger = ExpenseLogger(FakeLLM(), sessions, GLOBAL, book)
     lunch = await log(logger, transport, "lunch 50")

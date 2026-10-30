@@ -121,7 +121,7 @@ async def test_demo(sessions):
     closed = last(transport, TOMMY)
     assert "- Anna *SGD 10.00*" in closed and "- Ben *SGD 20.00*" in closed
     to, _, label, url = transport.sent_links[-1]
-    assert (to, label) == (TOMMY, "See it all") and url.startswith("https://sl.test/d/")
+    assert (to, label) == (TOMMY, "My dashboard") and url.startswith("https://sl.test/d/")
     assert last(transport, ANNA).startswith("*You owe Tommy SGD 10.00*")
     assert "*PayNow* to 8123 4567" in last(transport, ANNA)
     assert any(to == ANNA for to, _, _ in transport.sent_images)
