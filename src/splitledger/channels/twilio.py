@@ -10,7 +10,9 @@ from urllib.parse import parse_qsl
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
-from splitledger.channels.layout import link_key, numbered, split_choice, with_descriptions
+from splitledger.channels.layout import (
+    BUTTON_CHARS, ROW_CHARS, fit, link_key, numbered, split_choice, with_descriptions
+)
 from splitledger.channels.whatsapp import WhatsAppChannel
 from splitledger.contracts.messages import Inbound
 from splitledger.handlers.router import message_router
@@ -133,7 +135,7 @@ class TwilioTransport:
     ) -> None:
         values = {"1": body}
         for index, (button_id, title) in enumerate(buttons):
-            values[str(2 * index + 2)] = split_choice(title)[0]
+            values[str(2 * index + 2)] = fit(split_choice(title)[0], BUTTON_CHARS)
             values[str(2 * index + 3)] = button_id
         sid = await self._template_sid(len(buttons))
         await self._post_message(to, {"ContentSid": sid, "ContentVariables": json.dumps(values)})
@@ -143,7 +145,7 @@ class TwilioTransport:
         values = {"1": body}
         for index, (button_id, title) in enumerate(buttons):
             label, description = split_choice(title)
-            values[str(3 * index + 2)] = label[:24]
+            values[str(3 * index + 2)] = fit(label, ROW_CHARS)
             values[str(3 * index + 3)] = button_id
             values[str(3 * index + 4)] = (description or label)[:72]
         sid = await self._template_sid(len(buttons), "list")
@@ -181,7 +183,7 @@ class TwilioTransport:
         try:
             if not url.startswith(base + "/"):
                 raise ValueError("link is not on this app")
-            sid = await self._link_sid(label[:20], base)
+            sid = await self._link_sid(fit(label, BUTTON_CHARS), base)
             values = json.dumps({"1": text, "2": key})
             await self._post_message(to, {"ContentSid": sid, "ContentVariables": values})
         except (httpx.HTTPError, RuntimeError, KeyError, ValueError) as error:

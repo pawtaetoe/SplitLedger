@@ -2,6 +2,14 @@ import base64
 
 # a choice title may carry a description after this separator
 SEP = " — "
+# whatsapp label limits, longer ones are rejected
+BUTTON_CHARS = 20
+ROW_CHARS = 24
+
+
+# a label cut to fit, an ellipsis shows it was cut
+def fit(label: str, limit: int) -> str:
+    return label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
 
 
 # the short label and the optional description of one choice

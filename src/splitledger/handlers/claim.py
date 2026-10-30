@@ -200,7 +200,7 @@ class ClaimChat:
             "Shared a dish? Pick its number too, then tap I shared it."
         )
         free = [(n, line) for n, line in enumerate(view.lines, 1) if not line.holders]
-        buttons = [(f"claim:pick:{bill.code}:{n}", f"{n}. {line.name}"[:24]) for n, line in free]
+        buttons = [(f"claim:pick:{bill.code}:{n}", f"{n}. {line.name}") for n, line in free]
         if buttons and len(buttons) <= MAX_CHOICES:
             # a message has either reply buttons or a link button, so the link stays in the text
             page = f"\n\nOr tick them on a page:\n{link}" if link else ""
@@ -258,7 +258,7 @@ class ClaimChat:
             return
         notes = [f"{line.name} is taken by {line.holders[0]}" for _, line in taken]
         buttons = [
-            (f"claim:share:{bill.code}:{n}", f"I shared {line.name}"[:20]) for n, line in taken[:3]
+            (f"claim:share:{bill.code}:{n}", f"I shared {line.name}") for n, line in taken[:3]
         ]
         await transport.send_buttons(inbound.user_id, text + "\n\n" + "\n".join(notes), buttons)
 

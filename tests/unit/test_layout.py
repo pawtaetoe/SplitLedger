@@ -1,4 +1,4 @@
-from splitledger.channels.layout import numbered, split_choice, with_descriptions
+from splitledger.channels.layout import BUTTON_CHARS, fit, numbered, split_choice, with_descriptions
 
 CHOICES = [("a", "50/30/20 — needs, wants, savings"), ("b", "Cancel")]
 
@@ -23,3 +23,11 @@ def test_numbered():
         "*Pick a plan*\n\n*1* · 50/30/20 — needs, wants, savings\n*2* · Cancel\n\n"
         "_Reply with a number_"
     )
+
+
+# short labels stay whole, long ones are cut to the limit with an ellipsis
+def test_fit():
+    assert fit("Undo", BUTTON_CHARS) == "Undo"
+    cut = fit("12. Garlic butter prawns", BUTTON_CHARS)
+    assert cut == "12. Garlic butter p…"
+    assert len(cut) == BUTTON_CHARS
