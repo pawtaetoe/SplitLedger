@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 
 from splitledger.contracts.messages import Inbound
 from splitledger.db.models import LedgerEntry, User
-from splitledger.handlers.log import SPLIT_GONE, ExpenseLogger, quick_parse
+from splitledger.handlers.log import READING, SPLIT_GONE, ExpenseLogger, quick_parse
 from splitledger.llm.schemas import GLOBAL, ExpenseDraft, ReceiptDraft, ReceiptItem
 from tests.fakes import FakeLLM, FakeTransport
 from tests.fakes.router import fake_router
@@ -94,7 +94,8 @@ async def test_receipt_saved_once(sessions):
         rows = (await session.execute(select(LedgerEntry.amount_cents, LedgerEntry.source))).all()
     assert [(amount, source.value) for amount, source in rows] == [(2200, "RECEIPT")]
     assert transport.sent_buttons[0][1] == "✅ *Logged USD 22.00*\nDining · Cafe"
-    assert transport.sent_text[0][1].startswith("*Already logged*")
+    assert [text for _, text in transport.sent_text][0] == READING
+    assert transport.sent_text[-1][1].startswith("*Already logged*")
 
 
 # a voice note echoes the transcript, goes through the router and logs a voice expense
@@ -142,7 +143,7 @@ async def test_receipt_split_instead(sessions):
         voided = (await session.execute(select(LedgerEntry.voided_at))).scalar_one()
     assert voided is not None
     assert await logger.split_instead(tap, entry_id, key, transport) is None
-    assert transport.sent_text == [("14155550100", SPLIT_GONE)]
+    assert [text for _, text in transport.sent_text] == [READING, SPLIT_GONE]
 
 
 # undo last voids the newest entry first and then the one before

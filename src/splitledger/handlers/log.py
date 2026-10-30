@@ -27,6 +27,8 @@ MAX_VOICE_SECONDS = 60
 MAX_VOICE_BYTES = 1_000_000
 RESEND = "*Removed from your spending*\nSend the photo again with the caption _split_."
 SPLIT_GONE = "*That receipt is already removed or split*"
+# sent before a photo goes to the model, which can take several seconds
+READING = "Reading your receipt…"
 # optional currency symbol then an amount with up to two decimals
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 
@@ -181,7 +183,7 @@ class ExpenseLogger:
                 inbound.user_id, "*Already logged*\nThis receipt is saved already."
             )
             return
-        receipt = await self.read_receipt(image)
+        receipt = await self.read_receipt(image, inbound.user_id, transport)
         total = receipt.total_cents
         if total is None or total <= 0:
             await transport.send_text(
@@ -201,10 +203,15 @@ class ExpenseLogger:
         await self._save_receipt(inbound, transport, key)
 
     # the receipt in a photo, the same photo is never sent to the model twice
-    async def read_receipt(self, image: bytes) -> ReceiptDraft:
+    # with a transport the sender is told it is being read, so they don't send it again
+    async def read_receipt(
+        self, image: bytes, to: str | None = None, transport: Transport | None = None
+    ) -> ReceiptDraft:
         key = hashlib.sha256(image).hexdigest()
         receipt = self._receipts.get(key)
         if receipt is None:
+            if to and transport is not None:
+                await transport.send_text(to, READING)
             receipt = await self._llm.structured(RECEIPT_PROMPT, ReceiptDraft, images=[image])
             self._receipts[key] = receipt
         return receipt

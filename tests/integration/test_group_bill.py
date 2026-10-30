@@ -4,7 +4,7 @@ from splitledger.contracts.messages import Inbound
 from splitledger.db.models import Bill, BillItem, Participant, User
 from splitledger.handlers import bill as bill_module
 from splitledger.handlers.bill import GroupBills
-from splitledger.handlers.log import ExpenseLogger
+from splitledger.handlers.log import READING, ExpenseLogger
 from splitledger.llm.schemas import GLOBAL, ReceiptDraft, ReceiptItem
 from splitledger.split.tokens import ClaimTokens
 from tests.fakes import FakeLLM, FakeTransport
@@ -77,7 +77,7 @@ async def test_not_adding_up_asks_to_fix(sessions):
     to, text, buttons = transport.sent_buttons[-1]
     assert text == bill_module.FIX_FIRST.format("SGD 118.80", "SGD 200.00")
     assert buttons == [bill_module.edit_button(bill)]
-    assert transport.sent_text == []
+    assert [text for _, text in transport.sent_text] == [READING]
 
 
 # a clash with an existing code is retried with a fresh one
@@ -127,7 +127,7 @@ async def test_unsure_asks_how(sessions):
     _, ask, buttons = transport.sent_buttons[-1]
     assert ask == bill_module.HOW.format("SGD 118.80", bill_module.HOW_ITEMS)
     assert [title for _, title in buttons] == ["By what each had", "Evenly, 4 ways"]
-    assert transport.sent_text == []
+    assert [text for _, text in transport.sent_text] == [READING]
     even = buttons[1][0]
     await group.on_button(Inbound("m2", ME, "button", button_id=even), even, transport)
     async with sessions() as session:

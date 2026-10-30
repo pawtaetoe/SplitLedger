@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from splitledger.contracts.messages import Inbound
-from splitledger.handlers.log import RECEIPT_PROMPT, ExpenseLogger, receipt_adds_up
+from splitledger.handlers.log import READING, RECEIPT_PROMPT, ExpenseLogger, receipt_adds_up
 from splitledger.llm.client import MetaLLM
 from splitledger.llm.schemas import GLOBAL, ReceiptDraft, ReceiptItem
 from tests.fakes import FakeLLM, FakeTransport
@@ -77,7 +77,7 @@ async def test_mismatch_asks_to_confirm():
     assert llm.structured_calls == [RECEIPT_PROMPT]
 
 
-# the same photo twice calls the model once
+# the same photo twice calls the model once and says it is reading once
 async def test_same_photo_calls_model_once():
     llm = FakeLLM({"parse_receipt": receipt([6000, 4000], 12000, 13200)})
     transport = photo_transport()
@@ -86,6 +86,7 @@ async def test_same_photo_calls_model_once():
     await logger.log_receipt(photo(), transport)
     assert len(llm.structured_calls) == 1
     assert len(transport.sent_buttons) == 2
+    assert [text for _, text in transport.sent_text] == [READING]
 
 
 # an unreadable total asks the user to type it
@@ -93,7 +94,8 @@ async def test_missing_total_asks_to_type():
     llm = FakeLLM({"parse_receipt": receipt([500], None, None)})
     transport = photo_transport()
     await ExpenseLogger(llm, None, GLOBAL).log_receipt(photo(), transport)
-    assert "Type it instead" in transport.sent_text[0][1]
+    assert transport.sent_text[0][1] == READING
+    assert "Type it instead" in transport.sent_text[1][1]
 
 
 # confirming an unknown receipt saves nothing

@@ -209,7 +209,7 @@ class GroupBills:
             await transport.send_text(inbound.user_id, BAD_WAYS)
             return None
         image = await transport.fetch_media(inbound.media_ref or "")
-        receipt = await self._logger.read_receipt(image)
+        receipt = await self._logger.read_receipt(image, inbound.user_id, transport)
         return await self.from_draft(inbound, transport, receipt, ways, unsure)
 
     # check a receipt already read can be split, save the bill and send the forwardable message
