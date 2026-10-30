@@ -16,7 +16,8 @@ def test_expected_tables_exist():
         "bill_items",
         "participants",
         "item_claims",
-        "allocations"
+        "allocations",
+        "chat_state"
     }
 
 

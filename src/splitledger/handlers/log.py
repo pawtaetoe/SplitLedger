@@ -1,6 +1,7 @@
 import hashlib
 import re
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
@@ -11,8 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
+from splitledger.contracts.state import State
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import LedgerEntry, LedgerKind, LedgerSource, LedgerStatus, User
+from splitledger.db.state import DbState
 from splitledger.handlers.currency import currency_for, timezone_for
 from splitledger.llm.schemas import CURRENCY_CODES, Category, ExpenseDraft, Locale, ReceiptDraft
 
@@ -23,6 +26,9 @@ PROMPTS = Path(__file__).parents[1] / "llm" / "prompts"
 RECEIPT_PROMPT = f"parse_receipt: {(PROMPTS / 'parse_receipt.md').read_text(encoding='utf-8')}"
 # cents a printed total may be off by before we ask
 TOLERANCE = 5
+# how long a photo read stays reusable, and how long a logged photo is remembered
+RECEIPT_TTL = timedelta(days=7)
+LOGGED_TTL = timedelta(days=90)
 MAX_VOICE_SECONDS = 60
 MAX_VOICE_BYTES = 1_000_000
 RESEND = "*Removed from your spending*\nSend the photo again with the caption _split_."
@@ -147,14 +153,14 @@ class ExpenseLogger:
     # model, ledger sessions, locale and the quota book that adds plan lines to replies
     def __init__(
         self, llm: LLM, sessions: async_sessionmaker[AsyncSession], locale: Locale,
-        book: "QuotaBook | None" = None
+        book: "QuotaBook | None" = None, state: State | None = None
     ) -> None:
         self._llm = llm
         self._sessions = sessions
         self._locale = locale
         self._book = book
-        self._receipts: dict[str, ReceiptDraft] = {}
-        self._logged: set[tuple[str, str]] = set()
+        # receipts read and photos logged, kept in the database so a restart loses nothing
+        self._state = state or DbState(sessions)
 
     # save one expense and offer undo
     async def log(
@@ -192,7 +198,7 @@ class ExpenseLogger:
     async def log_receipt(self, inbound: Inbound, transport: Transport) -> None:
         image = await transport.fetch_media(inbound.media_ref or "")
         key = hashlib.sha256(image).hexdigest()
-        if (inbound.user_id, key) in self._logged:
+        if await self._logged(inbound.user_id, key):
             await transport.send_text(
                 inbound.user_id, "*Already logged*\nThis receipt is saved already."
             )
@@ -222,25 +228,37 @@ class ExpenseLogger:
         self, image: bytes, to: str | None = None, transport: Transport | None = None
     ) -> ReceiptDraft:
         key = hashlib.sha256(image).hexdigest()
-        receipt = self._receipts.get(key)
+        receipt = await self._receipt(key)
         if receipt is None:
             if to and transport is not None:
                 await transport.send_text(to, READING)
             receipt = await self._llm.structured(RECEIPT_PROMPT, ReceiptDraft, images=[image])
-            self._receipts[key] = receipt
+            await self._state.put("receipt", key, receipt.model_dump(mode="json"), RECEIPT_TTL)
         return receipt
+
+    # a photo read earlier, none when it was never read or has expired
+    async def _receipt(self, key: str) -> ReceiptDraft | None:
+        found = await self._state.get("receipt", key)
+        return ReceiptDraft.model_validate(found) if found else None
+
+    # whether this user already logged this photo
+    async def _logged(self, wa_user_id: str, key: str) -> bool:
+        return await self._state.get("logged", f"{wa_user_id}:{key}") is not None
 
     # save a receipt the user confirmed
     async def confirm_receipt(self, inbound: Inbound, key: str, transport: Transport) -> None:
-        if key not in self._receipts or (inbound.user_id, key) in self._logged:
+        if await self._receipt(key) is None or await self._logged(inbound.user_id, key):
             await transport.send_text(inbound.user_id, NOTHING_TO_SAVE)
             return
         await self._save_receipt(inbound, transport, key)
 
     # turn a stored receipt into one expense
     async def _save_receipt(self, inbound: Inbound, transport: Transport, key: str) -> None:
-        receipt = self._receipts[key]
-        self._logged.add((inbound.user_id, key))
+        receipt = await self._receipt(key)
+        if receipt is None:
+            await transport.send_text(inbound.user_id, NOTHING_TO_SAVE)
+            return
+        await self._state.put("logged", f"{inbound.user_id}:{key}", {}, LOGGED_TTL)
         draft = ExpenseDraft(
             amount_cents=receipt.total_cents,
             currency=receipt.currency,
@@ -299,8 +317,8 @@ class ExpenseLogger:
             await transport.send_text(inbound.user_id, SPLIT_GONE)
             return None
         # the same photo can be logged again later
-        self._logged.discard((inbound.user_id, key))
-        receipt = self._receipts.get(key)
+        await self._state.pop("logged", f"{inbound.user_id}:{key}")
+        receipt = await self._receipt(key)
         if receipt is None:
             await transport.send_text(inbound.user_id, RESEND)
         return receipt

@@ -14,7 +14,7 @@ class FakePlans:
         self.calls.append("welcome_if_new")
 
     # whether the next text is an income reply
-    def waiting_for_text(self, wa_user_id: str) -> bool:
+    async def waiting_for_text(self, wa_user_id: str) -> bool:
         return self.waiting
 
     # record a plan display

@@ -22,7 +22,7 @@ def msg(kind: str, value: str) -> Inbound:
 async def set_up(plans: PlanManager, transport: FakeTransport) -> None:
     await plans.on_button(msg("button", "plan:setup"), "plan:setup", transport)
     await plans.on_button(msg("button", "plan:fw:503020"), "plan:fw:503020", transport)
-    assert plans.waiting_for_text(ME)
+    assert await plans.waiting_for_text(ME)
     await plans.on_text(msg("text", "4500"), transport)
     await plans.on_button(msg("button", "plan:weekly"), "plan:weekly", transport)
     await plans.on_button(msg("button", "plan:save"), "plan:save", transport)
@@ -132,7 +132,7 @@ async def test_own_plan_with_a_limit(sessions):
     await plans.on_button(msg("button", "plan:setup"), "plan:setup", transport)
     await plans.on_button(msg("button", "plan:more"), "plan:more", transport)
     await plans.on_button(msg("button", "plan:fw:custom"), "plan:fw:custom", transport)
-    assert plans.waiting_for_text(ME)
+    assert await plans.waiting_for_text(ME)
     await plans.on_text(msg("text", "save 30%, food under 400 a month"), transport)
     await plans.on_text(msg("text", "4500"), transport)
     confirm = transport.sent_buttons[-1][1]
@@ -171,4 +171,4 @@ async def test_own_plan_model_down(sessions):
     await plans.on_button(msg("button", "plan:fw:custom"), "plan:fw:custom", transport)
     await plans.on_text(msg("text", "save half"), transport)
     assert transport.sent_buttons[-1][1].startswith("*I couldn't read that just now*")
-    assert plans.waiting_for_text(ME)
+    assert await plans.waiting_for_text(ME)

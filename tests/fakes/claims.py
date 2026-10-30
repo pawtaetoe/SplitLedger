@@ -25,7 +25,7 @@ class FakeClaims:
         self.calls.append(f"button {button_id}")
 
     # whether bare numbers count as claims, set by tests
-    def has_bill(self, wa_user_id: str) -> bool:
+    async def has_bill(self, wa_user_id: str) -> bool:
         return self.open
 
     # record numbers taken back

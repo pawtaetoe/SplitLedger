@@ -8,7 +8,7 @@ from splitledger.handlers import log as log_module
 from splitledger.handlers.log import READING, RECEIPT_PROMPT, ExpenseLogger, receipt_adds_up
 from splitledger.llm.client import MetaLLM
 from splitledger.llm.schemas import GLOBAL, ReceiptDraft, ReceiptItem
-from tests.fakes import FakeLLM, FakeTransport
+from tests.fakes import FakeLLM, FakeTransport, MemoryState
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 PHOTOS = sorted((FIXTURES / "receipts").glob("*.jpg"))
@@ -71,7 +71,7 @@ def photo_transport() -> FakeTransport:
 async def test_mismatch_asks_to_confirm():
     llm = FakeLLM({"parse_receipt": receipt([6000, 4000], 12000, 13200)})
     transport = photo_transport()
-    await ExpenseLogger(llm, None, GLOBAL).log_receipt(photo(), transport)
+    await ExpenseLogger(llm, None, GLOBAL, state=MemoryState()).log_receipt(photo(), transport)
     to, text, buttons = transport.sent_buttons[0]
     assert "USD 132.00" in text
     assert buttons[0][0].startswith("receipt:") and buttons[0][1] == "Yes, save it"
@@ -82,7 +82,7 @@ async def test_mismatch_asks_to_confirm():
 async def test_same_photo_calls_model_once():
     llm = FakeLLM({"parse_receipt": receipt([6000, 4000], 12000, 13200)})
     transport = photo_transport()
-    logger = ExpenseLogger(llm, None, GLOBAL)
+    logger = ExpenseLogger(llm, None, GLOBAL, state=MemoryState())
     await logger.log_receipt(photo(), transport)
     await logger.log_receipt(photo(), transport)
     assert len(llm.structured_calls) == 1
@@ -94,7 +94,7 @@ async def test_same_photo_calls_model_once():
 async def test_missing_total_asks_to_type():
     llm = FakeLLM({"parse_receipt": receipt([500], None, None)})
     transport = photo_transport()
-    await ExpenseLogger(llm, None, GLOBAL).log_receipt(photo(), transport)
+    await ExpenseLogger(llm, None, GLOBAL, state=MemoryState()).log_receipt(photo(), transport)
     assert transport.sent_text[0][1] == READING
     assert "Type it instead" in transport.sent_text[1][1]
 
@@ -102,7 +102,8 @@ async def test_missing_total_asks_to_type():
 # confirming an unknown receipt saves nothing
 async def test_confirm_unknown_receipt():
     transport = FakeTransport()
-    await ExpenseLogger(FakeLLM(), None, GLOBAL).confirm_receipt(photo(), "missing", transport)
+    logger = ExpenseLogger(FakeLLM(), None, GLOBAL, state=MemoryState())
+    await logger.confirm_receipt(photo(), "missing", transport)
     assert transport.sent_text == [("6581234567", log_module.NOTHING_TO_SAVE)]
 
 

@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import date, datetime
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
@@ -236,3 +237,13 @@ class Allocation(Base):
         sa.Enum(PaidStatus, name="paid_status"), default=PaidStatus.UNPAID
     )
     posted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+
+
+# short lived chat state like drafts and receipts read, so a restart loses nothing
+class ChatState(Base):
+    __tablename__ = "chat_state"
+
+    kind: Mapped[str] = mapped_column(sa.String, primary_key=True)
+    key: Mapped[str] = mapped_column(sa.String, primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), index=True)

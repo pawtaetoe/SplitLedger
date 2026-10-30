@@ -5,14 +5,17 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
+from splitledger.contracts.state import State
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import Bill, User
+from splitledger.db.state import DbState
 from splitledger.handlers.dashboard import DashboardLink
 from splitledger.handlers.log import ensure_user, money
 from splitledger.llm.schemas import ClaimMap, Locale
@@ -31,6 +34,8 @@ RECENT_DAYS = 7
 MAX_CHOICES = 3
 # minutes bare numbers still count as claims on the bill just opened
 CONTEXT_MINUTES = 30
+# how long a claim in words waits for Looks right or a fix
+DRAFT_TTL = timedelta(days=1)
 UNKNOWN = "*I can't find bill {}*\nCheck the code in the bill message, like _CLAIM K7Q2AB_."
 NO_BILL = "*Which bill?*\nSend _CLAIM_ and the code from the bill message, like _CLAIM K7Q2AB_."
 NO_MATCH = "*I couldn't match that to the bill*\nReply with item numbers, like _CLAIM {} 1,3_."
@@ -50,6 +55,11 @@ class Draft:
     claims: list[tuple[str | None, uuid.UUID, float]]
     text: str = ""
 
+    # the draft as json, the bill by its code
+    def to_json(self) -> dict[str, Any]:
+        claims = [[name, str(item), weight] for name, item, weight in self.claims]
+        return {"code": self.bill.code, "claims": claims, "text": self.text}
+
 
 # an item name with how much of it, for the check message
 def portion_text(name: str, weight: float) -> str:
@@ -64,18 +74,15 @@ class ClaimChat:
     # links sends each person their own signed link to the bill page
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], llm: LLM, book: ClaimBook,
-        locale: Locale, links: DashboardLink | None = None
+        locale: Locale, links: DashboardLink | None = None, state: State | None = None
     ) -> None:
         self._links = links
         self._sessions = sessions
         self._llm = llm
         self._book = book
         self._locale = locale
-        self._drafts: dict[str, Draft] = {}
-        # drafts the user asked to change, read again with their fix
-        self._changing: dict[str, Draft] = {}
-        # the bill each user last opened, so plain words know which bill
-        self._context: dict[str, tuple[str, datetime]] = {}
+        # the bill each user last opened and drafts in words, kept across restarts
+        self._state = state or DbState(sessions)
 
     # claim and a code lists the items, with numbers it claims them
     async def by_code(self, inbound: Inbound, text: str, transport: Transport) -> None:
@@ -88,7 +95,7 @@ class ClaimChat:
         if bill is None:
             await transport.send_text(inbound.user_id, UNKNOWN.format(code))
             return
-        self._remember(inbound.user_id, bill.code)
+        await self._remember(inbound.user_id, bill.code)
         me = await self._me(inbound, bill)
         view = await self._view(bill, me)
         if bill.even_ways:
@@ -107,12 +114,12 @@ class ClaimChat:
         await self._claim_numbers(inbound, transport, view, numbers)
 
     # true while the user has a bill open in this chat, so bare numbers are claims
-    def has_bill(self, wa_user_id: str) -> bool:
-        return self._recent(wa_user_id) is not None
+    async def has_bill(self, wa_user_id: str) -> bool:
+        return await self._recent(wa_user_id) is not None
 
     # bare numbers like 2, 6 claim on the bill last opened in this chat
     async def numbers(self, inbound: Inbound, text: str, transport: Transport) -> None:
-        code = self._recent(inbound.user_id)
+        code = await self._recent(inbound.user_id)
         bill = await self._book.open_bill(code) if code else None
         if bill is None:
             await transport.send_text(inbound.user_id, NO_BILL)
@@ -131,9 +138,9 @@ class ClaimChat:
         if bill is None:
             await transport.send_text(inbound.user_id, NO_BILL)
             return
-        self._remember(inbound.user_id, bill.code)
+        await self._remember(inbound.user_id, bill.code)
         # a fix to a draft they asked to change is read with what they said first
-        earlier = self._changing.pop(inbound.user_id, None)
+        earlier = await self._pop_draft("claim_change", inbound.user_id)
         if earlier is not None and earlier.bill.id == bill.id:
             text = f"{earlier.text}\nThen they corrected it: {text}"
         view = await self._view(bill, None)
@@ -156,7 +163,8 @@ class ClaimChat:
             if not quiet:
                 await transport.send_text(inbound.user_id, NO_MATCH.format(bill.code))
             return
-        self._drafts[inbound.user_id] = Draft(bill, claims, text)
+        draft = Draft(bill, claims, text)
+        await self._state.put("claim_draft", inbound.user_id, draft.to_json(), DRAFT_TTL)
         await self._confirm(inbound, transport, view, claims)
 
     # item buttons, share buttons and the check buttons
@@ -173,19 +181,19 @@ class ClaimChat:
                 return
             await self._share(inbound, transport, view, int(parts[3]))
             return
-        draft = self._drafts.pop(inbound.user_id, None)
+        draft = await self._pop_draft("claim_draft", inbound.user_id)
         if draft is None:
             await transport.send_text(inbound.user_id, NOTHING)
             return
         if parts[-1] != "ok":
-            self._changing[inbound.user_id] = draft
+            await self._state.put("claim_change", inbound.user_id, draft.to_json(), DRAFT_TTL)
             await transport.send_text(inbound.user_id, CHANGE)
             return
         await self._save(inbound, transport, draft)
 
     # remove 2, 6 drops those items from the sender's claims on the bill last opened
     async def unclaim(self, inbound: Inbound, text: str, transport: Transport) -> None:
-        code = self._recent(inbound.user_id)
+        code = await self._recent(inbound.user_id)
         bill = await self._book.open_bill(code) if code else None
         if bill is None:
             await transport.send_text(inbound.user_id, NO_BILL)
@@ -204,16 +212,24 @@ class ClaimChat:
                 return
         await self._summary(inbound, transport, bill, view.me.id, [])
 
-    # remember which bill this user is claiming on
-    def _remember(self, wa_user_id: str, code: str) -> None:
-        self._context[wa_user_id] = (code, datetime.now(UTC))
+    # remember which bill this user is claiming on for the next half hour
+    async def _remember(self, wa_user_id: str, code: str) -> None:
+        ttl = timedelta(minutes=CONTEXT_MINUTES)
+        await self._state.put("claim_bill", wa_user_id, {"code": code}, ttl)
 
     # the bill this user opened in the last half hour, none after that
-    def _recent(self, wa_user_id: str) -> str | None:
-        found = self._context.get(wa_user_id)
-        if found is None or datetime.now(UTC) - found[1] > timedelta(minutes=CONTEXT_MINUTES):
+    async def _recent(self, wa_user_id: str) -> str | None:
+        found = await self._state.get("claim_bill", wa_user_id)
+        return str(found["code"]) if found else None
+
+    # take a stored draft back, with its bill as it is now
+    async def _pop_draft(self, kind: str, wa_user_id: str) -> Draft | None:
+        found = await self._state.pop(kind, wa_user_id)
+        view = await self._book.view(str(found["code"]), None) if found else None
+        if found is None or view is None:
             return None
-        return found[0]
+        claims = [(name, uuid.UUID(item), float(weight)) for name, item, weight in found["claims"]]
+        return Draft(view.bill, claims, str(found["text"]))
 
     # the bill with who has each item, the free items as buttons
     async def _list(
@@ -379,7 +395,7 @@ class ClaimChat:
 
     # the bill last opened in this chat, else the sender's latest bill as payer
     async def _bill_for(self, inbound: Inbound) -> Bill | None:
-        code = self._recent(inbound.user_id)
+        code = await self._recent(inbound.user_id)
         bill = await self._book.open_bill(code) if code else None
         if bill is not None:
             return bill

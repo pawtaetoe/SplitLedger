@@ -161,9 +161,9 @@ async def test_bare_numbers(sessions):
     await seed(sessions)
     claims = chat(sessions)
     transport = FakeTransport()
-    assert not claims.has_bill(ANNA)
+    assert not await claims.has_bill(ANNA)
     await claims.by_code(text(ANNA, "CLAIM K7Q2AB", "Anna"), "CLAIM K7Q2AB", transport)
-    assert claims.has_bill(ANNA)
+    assert await claims.has_bill(ANNA)
     await claims.numbers(text(ANNA, "1, 3", "Anna"), "1, 3", transport)
     async with sessions() as session:
         assert len((await session.execute(select(ItemClaim))).all()) == 2

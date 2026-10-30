@@ -1,17 +1,23 @@
 import asyncio
 import logging
 import re
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass, field
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from splitledger.contracts.llm import LLM
 from splitledger.contracts.messages import Inbound
+from splitledger.contracts.state import State
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import BudgetPlan, User
+from splitledger.db.state import DbState
 from splitledger.handlers.dashboard import SEE_ALL, DashboardLink
 from splitledger.handlers.log import ensure_user, money
 from splitledger.llm.schemas import CustomPlan, Locale
@@ -47,6 +53,8 @@ CANCEL = ("plan:cancel", "Cancel")
 # an amount like 4500, 4,500.50 or 4.5k with an optional currency in front
 INCOME = re.compile(r"^\s*(?:[a-z]{3}\s*|[^\d\s]{1,2})?(\d[\d,]*(?:\.\d+)?)\s*(k)?\s*$", re.I)
 MAX_INCOME_CENTS = 1_000_000_000
+# how long a half finished set up waits for the next tap
+DRAFT_TTL = timedelta(days=1)
 
 
 # monthly income in cents from a reply, none when it is not a plain amount
@@ -72,20 +80,47 @@ class Draft:
     notes: list[str] = field(default_factory=list)
     failures: int = 0
 
+    # the draft as json for the state store
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+    # a draft back from the state store
+    @staticmethod
+    def from_json(found: dict[str, Any]) -> "Draft":
+        framework = found.get("framework")
+        return Draft(**{**found, "framework": Framework(**framework) if framework else None})
+
 
 # plan set up, display and removal over a few button taps
 class PlanManager:
     # sessions, the quota book, the locale for new users, the model for own plans and page links
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], book: QuotaBook, locale: Locale,
-        llm: LLM, links: DashboardLink | None = None
+        llm: LLM, links: DashboardLink | None = None, state: State | None = None
     ) -> None:
         self._sessions = sessions
         self._book = book
         self._locale = locale
         self._llm = llm
         self._links = links
+        # drafts for the message being handled, loaded from and saved back to the state store
         self._drafts: dict[str, Draft] = {}
+        self._state = state or DbState(sessions)
+
+    # load this user's draft for one message, then save it, or clear it when it was dropped
+    @asynccontextmanager
+    async def _draft_of(self, wa_user_id: str) -> AsyncIterator[None]:
+        found = await self._state.get("plan_draft", wa_user_id)
+        if found is not None:
+            self._drafts[wa_user_id] = Draft.from_json(found)
+        try:
+            yield
+        finally:
+            draft = self._drafts.pop(wa_user_id, None)
+            if draft is not None:
+                await self._state.put("plan_draft", wa_user_id, draft.to_json(), DRAFT_TTL)
+            elif found is not None:
+                await self._state.pop("plan_draft", wa_user_id)
 
     # greet someone the first time they ever message
     async def welcome_if_new(self, inbound: Inbound, transport: Transport) -> None:
@@ -100,12 +135,27 @@ class PlanManager:
             await transport.send_buttons(inbound.user_id, WELCOME, choices)
 
     # true while we are waiting for a typed plan or income reply
-    def waiting_for_text(self, wa_user_id: str) -> bool:
-        draft = self._drafts.get(wa_user_id)
-        return draft is not None and draft.step in ("describe", "income")
+    async def waiting_for_text(self, wa_user_id: str) -> bool:
+        found = await self._state.get("plan_draft", wa_user_id)
+        return found is not None and found.get("step") in ("describe", "income")
 
     # show the current plan, or start set up when there is none
     async def show(self, inbound: Inbound, transport: Transport) -> None:
+        async with self._draft_of(inbound.user_id):
+            await self._show(inbound, transport)
+
+    # every plan button moves the set up one step
+    async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
+        async with self._draft_of(inbound.user_id):
+            await self._on_button(inbound, button_id, transport)
+
+    # a typed plan or the income reply
+    async def on_text(self, inbound: Inbound, transport: Transport) -> None:
+        async with self._draft_of(inbound.user_id):
+            await self._on_text(inbound, transport)
+
+    # the current plan, or start set up when there is none
+    async def _show(self, inbound: Inbound, transport: Transport) -> None:
         async with self._sessions() as session:
             user_id, _ = await ensure_user(session, inbound.user_id, self._locale)
             await session.commit()
@@ -135,8 +185,8 @@ class PlanManager:
         first = [b for b in buttons if b[0] != "plan:fw:60"]
         await transport.send_buttons(inbound.user_id, PICK, [*first, MORE])
 
-    # every plan button moves the set up one step
-    async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
+    # one plan button
+    async def _on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
         user = inbound.user_id
         action = button_id.removeprefix("plan:")
         if action in ("setup", "change"):
@@ -160,9 +210,12 @@ class PlanManager:
             return
         await self._step(inbound, action, draft, transport)
 
-    # a typed plan or the income reply
-    async def on_text(self, inbound: Inbound, transport: Transport) -> None:
-        draft = self._drafts[inbound.user_id]
+    # one typed plan or income reply, the draft is gone when it expired meanwhile
+    async def _on_text(self, inbound: Inbound, transport: Transport) -> None:
+        draft = self._drafts.get(inbound.user_id)
+        if draft is None:
+            await self.start(inbound, transport)
+            return
         if draft.step == "describe":
             await self._describe(inbound, draft, transport)
             return

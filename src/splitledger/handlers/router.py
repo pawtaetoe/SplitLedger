@@ -266,7 +266,7 @@ class Router:
                 return
             await self.menu(inbound, transport)
             return
-        if self._plans.waiting_for_text(inbound.user_id):
+        if await self._plans.waiting_for_text(inbound.user_id):
             await self._plans.on_text(inbound, transport)
             return
         if words_in(text) and set(words_in(text)) <= DASH_WORDS | {"my", "open", "the"}:
@@ -275,7 +275,7 @@ class Router:
         if words_in(text) and set(words_in(text)) <= MENU_WORDS:
             await self.menu(inbound, transport)
             return
-        if UNCLAIM.match(text) and self._claims.has_bill(inbound.user_id):
+        if UNCLAIM.match(text) and await self._claims.has_bill(inbound.user_id):
             await self._claims.unclaim(inbound, text, transport)
             return
         said = set(words_in(text))
@@ -290,7 +290,7 @@ class Router:
         if CLAIM.match(text):
             await self._claims.by_code(inbound, text, transport)
             return
-        if NUMBER_LIST.match(text) and self._claims.has_bill(inbound.user_id):
+        if NUMBER_LIST.match(text) and await self._claims.has_bill(inbound.user_id):
             await self._claims.numbers(inbound, text, transport)
             return
         result = await self._reader.read(text, inbound.user_id)
