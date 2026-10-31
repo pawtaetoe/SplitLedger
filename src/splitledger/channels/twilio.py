@@ -21,6 +21,8 @@ API_BASE = "https://api.twilio.com/2010-04-01/Accounts"
 CONTENT_URL = "https://content.twilio.com/v1/Content"
 # choices a whatsapp list holds, more are numbered
 MAX_LIST = 10
+# button id prefix for picking a dish on a bill, ending in the dish number
+DISH = "claim:pick:"
 
 
 # check a twilio signature against the url and posted params
@@ -114,8 +116,13 @@ class TwilioTransport:
 
     # send text plus numbered options and remember them for the next reply
     async def send_buttons(self, to: str, text: str, buttons: list[tuple[str, str]]) -> None:
-        # digits keep working even when real buttons are shown
-        self._menus[to] = {str(n): button_id for n, (button_id, _) in enumerate(buttons, 1)}
+        # dish buttons skip digit menus so a typed number means that dish on the bill
+        dishes = all(button_id.startswith(DISH) for button_id, _ in buttons)
+        if dishes:
+            self._menus.pop(to, None)
+        else:
+            # digits keep working even when real buttons are shown
+            self._menus[to] = {str(n): button_id for n, (button_id, _) in enumerate(buttons, 1)}
         try:
             if len(buttons) <= 3:
                 await self._send_quick_reply(to, with_descriptions(text, buttons), buttons)
@@ -125,7 +132,8 @@ class TwilioTransport:
                 return
         except (httpx.HTTPError, RuntimeError, KeyError, ValueError) as error:
             LOG.warning("twilio buttons failed with %s, sending numbers", type(error).__name__)
-        await self.send_text(to, numbered(text, buttons))
+        # the bill text already numbers its dishes
+        await self.send_text(to, text if dishes else numbered(text, buttons))
 
     # real tappable buttons through a reusable content template
     async def _send_quick_reply(

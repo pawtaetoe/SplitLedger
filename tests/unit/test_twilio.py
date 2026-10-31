@@ -168,6 +168,21 @@ async def test_digit_reply_becomes_button():
     assert transport.apply_menu(reply).kind == "text"
 
 
+# a typed digit after dish buttons stays text so it means that dish, not that button
+@respx.mock
+async def test_dish_buttons_keep_dish_numbers():
+    respx.get(CONTENT_URL).mock(return_value=httpx.Response(500))
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(201, json={}))
+    transport = twilio.TwilioTransport(SID, TOKEN, SENDER)
+    await transport.send_buttons("6581234567", "Logged", [("undo:1", "Undo")])
+    picks = [(f"claim:pick:K7Q2AB:{n}", f"{n}. Dish {n}") for n in (2, 3, 4)]
+    await transport.send_buttons("6581234567", "Bill\n2. Dish 2", picks)
+    sent = parse_qs(route.calls.last.request.content.decode())
+    assert sent["Body"] == ["Bill\n2. Dish 2"]
+    typed = transport.apply_menu(Inbound("m1", "6581234567", "text", text="2"))
+    assert (typed.kind, typed.text) == ("text", "2")
+
+
 # any other message clears the menu
 @respx.mock
 async def test_other_message_clears_menu():
