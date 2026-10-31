@@ -23,6 +23,11 @@ ADD_HINT = "To add one, type it like _phone 48 every month on the 5th_."
 UNDONE = "Removed *{}* from your upcoming bills."
 ALREADY = "That was already done."
 REMIND_ON = "*Reminders on*\nI'll message you the day before it's due."
+REMIND_OFF = "*Reminders off*\nIt stays in your upcoming bills."
+MANAGE = "Tap a bill to remove it or change its reminder."
+GONE = "*That bill is removed already*"
+# bills offered as choices under the list, a whatsapp list holds ten
+MAX_CHOICES = 10
 NOT_YET = "*OK, still to pay*\nI'll keep it in what's due this month."
 
 
@@ -70,7 +75,7 @@ class UpcomingBills:
             await transport.send_text(inbound.user_id, NONE_YET)
             return
         today = datetime.now(ZoneInfo(user.timezone)).date()
-        lines: list[tuple[date, str]] = []
+        lines: list[tuple[date, str, PlannedSpend]] = []
         for plan in plans:
             days = open_days(plan, today, today + timedelta(days=NEXT_DAYS))
             if days:
@@ -79,33 +84,63 @@ class UpcomingBills:
                 lines.append((days[0], (
                     f"- {plan.label} *{amount}* · {EVERY_TEXT[plan.every]}"
                     f" · next {short_day(days[0])}{bell}"
-                )))
+                ), plan))
         if not lines:
             await transport.send_text(inbound.user_id, NONE_YET)
             return
+        lines.sort(key=lambda line: line[0])
         due = money(outlook(plans, today).due_total(), user.currency)
-        body = "\n".join(line for _, line in sorted(lines, key=lambda pair: pair[0]))
-        await transport.send_text(
-            inbound.user_id,
-            f"*Upcoming bills*\n{body}\n\nStill to pay this month: *{due}*\n{ADD_HINT}"
-        )
+        body = "\n".join(text for _, text, _ in lines)
+        buttons = [(f"bills:pick:{plan.id}", plan.label) for _, _, plan in lines[:MAX_CHOICES]]
+        text = f"*Upcoming bills*\n{body}\n\nStill to pay this month: *{due}*"
+        await transport.send_buttons(inbound.user_id, f"{text}\n{MANAGE}\n{ADD_HINT}", buttons)
 
-    # bills buttons: undo, remind, paid and not yet
+    # bills buttons: pick, undo, remind, quiet, paid and not yet
     async def on_button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
         action, _, rest = button_id.removeprefix("bills:").partition(":")
         if action == "paid":
             await self._paid(inbound, rest, transport)
             return
-        if action not in ("undo", "remind"):
+        if action == "pick":
+            await self._options(inbound, rest, transport)
+            return
+        if action not in ("undo", "remind", "quiet"):
             await transport.send_text(inbound.user_id, NOT_YET)
             return
-        values = {"voided_at": func.now()} if action == "undo" else {"remind": True}
+        values = {"voided_at": func.now()} if action == "undo" else {"remind": action == "remind"}
         labels = await self._update(inbound, parse_ids(rest), values)
         if not labels:
             await transport.send_text(inbound.user_id, ALREADY)
             return
-        done = UNDONE.format(", ".join(labels)) if action == "undo" else REMIND_ON
-        await transport.send_text(inbound.user_id, done)
+        done = {"undo": UNDONE.format(", ".join(labels)), "remind": REMIND_ON}
+        await transport.send_text(inbound.user_id, done.get(action, REMIND_OFF))
+
+    # one of the user's bills with remove and a reminder switch
+    async def _options(self, inbound: Inbound, key: str, transport: Transport) -> None:
+        query = (
+            select(PlannedSpend)
+            .join(User, PlannedSpend.user_id == User.id)
+            .where(
+                PlannedSpend.id.in_(parse_ids(key)),
+                User.wa_user_id == inbound.user_id,
+                PlannedSpend.voided_at.is_(None)
+            )
+        )
+        async with self._sessions() as session:
+            plan = (await session.execute(query)).scalars().first()
+        if plan is None:
+            await transport.send_text(inbound.user_id, GONE)
+            return
+        amount = money(plan.amount_cents, plan.currency)
+        bell = "Reminder on" if plan.remind else "No reminder"
+        switch = (f"bills:quiet:{plan.id}", "Reminders off") if plan.remind else (
+            f"bills:remind:{plan.id}", "Remind me"
+        )
+        await transport.send_buttons(
+            inbound.user_id,
+            f"*{plan.label} {amount}*\n{EVERY_TEXT[plan.every].capitalize()} · {bell}",
+            [(f"bills:undo:{plan.id}", "Remove"), switch]
+        )
 
     # mark one due day paid once, then save it as an expense with the usual undo
     async def _paid(self, inbound: Inbound, rest: str, transport: Transport) -> None:

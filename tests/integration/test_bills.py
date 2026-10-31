@@ -80,7 +80,9 @@ async def test_show_and_undo(sessions):
     bills = handler(sessions)
     transport = FakeTransport()
     await bills.show(tap("menu:bills"), transport)
-    assert transport.sent_text[-1][1].startswith("*Upcoming bills*\n- rent *SGD 1,800.00*")
+    _, text, buttons = transport.sent_buttons[-1]
+    assert text.startswith("*Upcoming bills*\n- rent *SGD 1,800.00*")
+    assert buttons == [(f"bills:pick:{rent.id}", "rent")]
     stranger = Inbound("m2", "6599999999", "button")
     undo = f"bills:undo:{rent.id}"
     await bills.on_button(stranger, undo, transport)
@@ -89,3 +91,23 @@ async def test_show_and_undo(sessions):
     assert transport.sent_text[-1][1] == bills_module.UNDONE.format("rent")
     await bills.show(tap("menu:bills"), transport)
     assert transport.sent_text[-1][1] == bills_module.NONE_YET
+
+
+# picking a bill offers remove and a reminder switch that flips, other users can't pick it
+async def test_pick_switches_reminder(sessions):
+    rent = await seed(sessions, remind=True)
+    bills = handler(sessions)
+    transport = FakeTransport()
+    pick = f"bills:pick:{rent.id}"
+    await bills.on_button(Inbound("m2", "6599999999", "button"), pick, transport)
+    assert transport.sent_text[-1][1] == bills_module.GONE
+    await bills.on_button(tap(pick), pick, transport)
+    _, text, buttons = transport.sent_buttons[-1]
+    assert text == "*rent SGD 1,800.00*\nEvery month · Reminder on"
+    quiet = f"bills:quiet:{rent.id}"
+    assert buttons == [(f"bills:undo:{rent.id}", "Remove"), (quiet, "Reminders off")]
+    await bills.on_button(tap(quiet), quiet, transport)
+    assert transport.sent_text[-1][1] == bills_module.REMIND_OFF
+    assert await bills.send_due(transport, NOW) == 0
+    await bills.on_button(tap(pick), pick, transport)
+    assert transport.sent_buttons[-1][2][1] == (f"bills:remind:{rent.id}", "Remind me")
