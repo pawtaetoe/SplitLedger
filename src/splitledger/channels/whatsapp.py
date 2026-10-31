@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.exc import IntegrityError
 
-from splitledger.channels.layout import fit, split_choice, with_descriptions
+from splitledger.channels.layout import fit, split_choice, unique_labels, with_descriptions
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import ProcessedMessage
@@ -108,22 +108,21 @@ class WhatsAppTransport:
     # send text with reply buttons, or a pick list when there are more than three
     async def send_buttons(self, to: str, text: str, buttons: list[tuple[str, str]]) -> None:
         choices = [(button_id, *split_choice(title)) for button_id, title in buttons]
+        # whatsapp allows three reply buttons, a list holds up to ten rows with descriptions
+        listed = len(buttons) > 3
+        labels = unique_labels([label for _, label, _ in choices], row=listed)
         action: dict[str, Any] = {
             "buttons": [
-                {"type": "reply", "reply": {"id": button_id, "title": fit(label)}}
-                for button_id, label, _ in choices
+                {"type": "reply", "reply": {"id": button_id, "title": label}}
+                for (button_id, _, _), label in zip(choices, labels, strict=True)
             ]
         }
         kind = "button"
         body = with_descriptions(text, buttons)
-        # whatsapp allows three reply buttons, a list holds up to ten rows with descriptions
-        if len(buttons) > 3:
+        if listed:
             rows = [
-                {
-                    "id": button_id, "title": fit(label, row=True),
-                    **({"description": desc} if desc else {})
-                }
-                for button_id, label, desc in choices
+                {"id": button_id, "title": label, **({"description": desc} if desc else {})}
+                for (button_id, _, desc), label in zip(choices, labels, strict=True)
             ]
             action = {"button": "Choose", "sections": [{"title": "Options", "rows": rows}]}
             kind = "list"

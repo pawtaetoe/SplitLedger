@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
+from splitledger.channels import layout
 from splitledger.channels.layout import fit, link_key, numbered, split_choice, with_descriptions
 from splitledger.channels.whatsapp import WhatsAppChannel
 from splitledger.contracts.messages import Inbound
@@ -142,8 +143,9 @@ class TwilioTransport:
         self, to: str, body: str, buttons: list[tuple[str, str]]
     ) -> None:
         values = {"1": body}
-        for index, (button_id, title) in enumerate(buttons):
-            values[str(2 * index + 2)] = fit(split_choice(title)[0])
+        labels = layout.unique_labels([split_choice(title)[0] for _, title in buttons])
+        for index, ((button_id, _), label) in enumerate(zip(buttons, labels, strict=True)):
+            values[str(2 * index + 2)] = label
             values[str(2 * index + 3)] = button_id
         sid = await self._template_sid(len(buttons))
         await self._post_message(to, {"ContentSid": sid, "ContentVariables": json.dumps(values)})
@@ -151,9 +153,12 @@ class TwilioTransport:
     # four to ten choices as a tap list, each with its id and description
     async def _send_list(self, to: str, body: str, buttons: list[tuple[str, str]]) -> None:
         values = {"1": body}
-        for index, (button_id, title) in enumerate(buttons):
-            label, description = split_choice(title)
-            values[str(3 * index + 2)] = fit(label, row=True)
+        choices = [split_choice(title) for _, title in buttons]
+        labels = layout.unique_labels([label for label, _ in choices], row=True)
+        for index, ((button_id, _), (label, description), short) in enumerate(
+            zip(buttons, choices, labels, strict=True)
+        ):
+            values[str(3 * index + 2)] = short
             values[str(3 * index + 3)] = button_id
             values[str(3 * index + 4)] = (description or label)[:72]
         sid = await self._template_sid(len(buttons), "list")

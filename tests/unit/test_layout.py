@@ -26,6 +26,17 @@ def test_numbered():
     )
 
 
+# repeated labels are numbered so whatsapp accepts them, cut first so the number still fits
+def test_unique_labels():
+    assert layout.unique_labels(["Jumbo", "Cancel", "Jumbo", "Jumbo"]) == [
+        "Jumbo", "Cancel", "Jumbo 2", "Jumbo 3"
+    ]
+    long = "Jumbo Seafood Restaurant"
+    second = layout.unique_labels([long, long])[1]
+    assert second == "Jumbo Seafood Res… 2" and len(second) == layout.BUTTON_CHARS
+    assert layout.unique_labels(["phone", "phone"], row=True) == ["phone", "phone 2"]
+
+
 # short labels stay whole, long ones are cut to the limit with an ellipsis
 def test_fit():
     assert fit("Undo") == "Undo"

@@ -126,6 +126,24 @@ async def test_send_text_calls_graph_api():
     assert route.calls.last.request.headers["Authorization"] == "Bearer token"
 
 
+# two buttons with one title are numbered apart, as reply buttons and as list rows
+@respx.mock
+async def test_send_buttons_titles_are_unique():
+    route = respx.post("https://graph.facebook.com/v21.0/999/messages").mock(
+        return_value=httpx.Response(200, json={"messages": [{"id": "wamid.out"}]})
+    )
+    transport = whatsapp.WhatsAppTransport(access_token="token", phone_number_id="999")
+    pair = [("bill:close:AAAAAA", "Jumbo — SGD 10.00"), ("bill:close:BBBBBB", "Jumbo — SGD 20.00")]
+    await transport.send_buttons("6581234567", "Which?", pair)
+    action = json.loads(route.calls.last.request.content)["interactive"]["action"]
+    assert [b["reply"]["title"] for b in action["buttons"]] == ["Jumbo", "Jumbo 2"]
+    bills = [(f"bills:pick:{n}", "phone") for n in range(4)]
+    await transport.send_buttons("6581234567", "Bills", bills)
+    action = json.loads(route.calls.last.request.content)["interactive"]["action"]
+    titles = [row["title"] for row in action["sections"][0]["rows"]]
+    assert titles == ["phone", "phone 2", "phone 3", "phone 4"]
+
+
 # a graph error surfaces its code and message
 @respx.mock
 async def test_send_text_surfaces_graph_error():

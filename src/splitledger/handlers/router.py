@@ -200,7 +200,7 @@ class Router:
         # stickers, files and anything else unreadable get what the bot can read
         await self.menu(inbound, transport, NO_FILES if inbound.text == "document" else UNREADABLE)
 
-    # each button prefix goes to its handler, unknown ones echo
+    # each button prefix goes to its handler, unknown ones get the menu
     async def _button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:
         if button_id == "plan:web":
             await self._dash.send(inbound, transport, "plan")

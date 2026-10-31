@@ -46,7 +46,7 @@ CHECK_TOTAL = (
     "*Check the total*\nThe lines on this receipt don't add up.\nIs the total *{}*?\n"
     "Not right? Type it instead, like _lunch 23.40_."
 )
-NOTHING_TO_SAVE ="*Nothing to save*\nIt's saved already or has expired. Send the photo again."
+NOTHING_TO_SAVE = "*Nothing to save*\nIt's saved already or has expired. Send the photo again."
 # optional currency symbol then an amount with up to two decimals
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 

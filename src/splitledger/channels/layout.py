@@ -7,10 +7,24 @@ BUTTON_CHARS = 20
 ROW_CHARS = 24
 
 
-# a button or list row label cut to fit, an ellipsis shows it was cut
-def fit(label: str, row: bool = False) -> str:
-    limit = ROW_CHARS if row else BUTTON_CHARS
+# a button or list row label cut to fit, an ellipsis shows it was cut, keep leaves room after it
+def fit(label: str, row: bool = False, keep: int = 0) -> str:
+    limit = (ROW_CHARS if row else BUTTON_CHARS) - keep
     return label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
+
+
+# fitted labels with repeats numbered, whatsapp rejects two buttons with one title
+def unique_labels(labels: list[str], row: bool = False) -> list[str]:
+    seen: dict[str, int] = {}
+    fitted: list[str] = []
+    for label in labels:
+        short = fit(label, row)
+        count = seen[short] = seen.get(short, 0) + 1
+        if count > 1:
+            tag = f" {count}"
+            short = fit(label, row, len(tag)) + tag
+        fitted.append(short)
+    return fitted
 
 
 # the short label and the optional description of one choice
