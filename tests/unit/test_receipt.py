@@ -73,7 +73,7 @@ async def test_mismatch_asks_to_confirm():
     transport = photo_transport()
     await ExpenseLogger(llm, None, GLOBAL, state=MemoryState()).log_receipt(photo(), transport)
     to, text, buttons = transport.sent_buttons[0]
-    assert "USD 132.00" in text
+    assert text == log_module.CHECK_TOTAL.format("USD 132.00")
     assert buttons[0][0].startswith("receipt:") and buttons[0][1] == "Yes, save it"
     assert llm.structured_calls == [RECEIPT_PROMPT]
 

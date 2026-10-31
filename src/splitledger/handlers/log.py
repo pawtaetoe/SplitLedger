@@ -41,7 +41,12 @@ UNDO_ASK = "*Remove your last entry?*\n{}"
 PICK_CATEGORY = "*Which category?*"
 MOVED = "✅ *Moved to {}*\n{}"
 GONE = "*That entry is removed already*"
-NOTHING_TO_SAVE = "*Nothing to save*\nIt's saved already or has expired. Send the photo again."
+# a misread total gets a way out, typing it instead
+CHECK_TOTAL = (
+    "*Check the total*\nThe lines on this receipt don't add up.\nIs the total *{}*?\n"
+    "Not right? Type it instead, like _lunch 23.40_."
+)
+NOTHING_TO_SAVE ="*Nothing to save*\nIt's saved already or has expired. Send the photo again."
 # optional currency symbol then an amount with up to two decimals
 AMOUNT = re.compile(r"(?<![\w.])((?:[A-Z]{1,2})?[$€£¥₹])?(\d+(?:\.\d{1,2})?)(?![\w.])")
 
@@ -214,10 +219,7 @@ class ExpenseLogger:
         if not receipt_adds_up(receipt):
             shown = money(total, receipt.currency or self._locale.currency)
             await transport.send_buttons(
-                inbound.user_id,
-                "*Check the total*\nThe lines on this receipt don't add up.\n"
-                f"Is the total *{shown}*?",
-                [(f"receipt:{key}", "Yes, save it")]
+                inbound.user_id, CHECK_TOTAL.format(shown), [(f"receipt:{key}", "Yes, save it")]
             )
             return
         await self._save_receipt(inbound, transport, key)
