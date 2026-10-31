@@ -46,6 +46,18 @@ def test_parse_fixtures():
     assert (button.kind, button.button_id) == ("button", "save")
 
 
+# files and stickers come in as other so the bot can answer, reactions are dropped
+def test_parse_unreadable():
+    def one(kind: str) -> list:
+        value = {"messages": [{"from": "6581234567", "id": "wamid.x", "type": kind}]}
+        return whatsapp.parse_inbound({"entry": [{"changes": [{"value": value}]}]})
+
+    document = one("document")[0]
+    assert (document.kind, document.text) == ("other", "document")
+    assert one("sticker")[0].kind == "other"
+    assert one("reaction") == []
+
+
 # signature check accepts meta style headers only
 def test_verify_signature():
     body = b"payload"

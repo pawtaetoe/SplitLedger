@@ -18,6 +18,8 @@ from splitledger.handlers.router import Router, message_router
 from splitledger.settings import settings
 
 GRAPH_BASE = "https://graph.facebook.com/v21.0"
+# message types the bot answers with what it can read, reactions stay silent
+UNREAD = frozenset({"document", "video", "sticker", "location", "contacts", "unsupported"})
 
 
 # check a meta signature header against the raw body
@@ -65,6 +67,8 @@ def _parse_message(message: dict[str, Any]) -> Inbound | None:
         return Inbound(
             message_id, user_id, "button", text=reply.get("title"), button_id=reply.get("id")
         )
+    if kind in UNREAD:
+        return Inbound(message_id, user_id, "other", text=kind)
     return None
 
 

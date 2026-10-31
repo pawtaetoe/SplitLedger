@@ -7,7 +7,8 @@ from typing import Literal
 class Inbound:
     message_id: str
     user_id: str
-    kind: Literal["text", "image", "audio", "button"]
+    # other is a message the bot cannot read, its text names the type like document
+    kind: Literal["text", "image", "audio", "button", "other"]
     text: str | None = None
     media_ref: str | None = None
     button_id: str | None = None

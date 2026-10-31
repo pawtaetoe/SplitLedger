@@ -69,6 +69,13 @@ BY_ITEM = frozenset({"dish", "dishes", "item", "items", "own", "had"})
 REPEAT_WORDS = frozenset({"every", "monthly", "weekly", "yearly", "upcoming"})
 HELP = "*What would you like to do?*\nTap one below."
 UNCLEAR = "*Sorry, I didn't catch that*\nTap one below, or type something like _coffee 4.50_."
+UNREADABLE = (
+    "*I can't read that kind of message*\nSend text, a photo or a voice note, or tap one below."
+)
+NO_FILES = (
+    "*I can't open files yet*\n"
+    "Send a photo or screenshot of the receipt instead, or tap one below."
+)
 # the menu shown wherever the user might not know what to do next
 MENU = [
     ("menu:log", "Log spending — type it, or send a photo or voice note"),
@@ -189,10 +196,8 @@ class Router:
             text = (inbound.text or "").strip()
             await self._text(inbound, text, transport, LedgerSource.TEXT)
             return
-        if inbound.kind == "audio":
-            await transport.send_text(inbound.user_id, "[audio]")
-            return
-        await transport.send_text(inbound.user_id, inbound.text or "")
+        # stickers, files and anything else unreadable get what the bot can read
+        await self.menu(inbound, transport, NO_FILES if inbound.text == "document" else UNREADABLE)
 
     # each button prefix goes to its handler, unknown ones echo
     async def _button(self, inbound: Inbound, button_id: str, transport: Transport) -> None:

@@ -238,6 +238,17 @@ async def test_menu_choices():
     assert transport.sent_buttons[-1][2] == router_module.MENU
 
 
+# files get a screenshot hint and other unreadable messages say what the bot can read
+async def test_unreadable_gets_menu():
+    router = build(FakeLLM(), FakeLogger())
+    transport = FakeTransport()
+    await router.handle(Inbound("m1", USER, "other", text="document"), transport)
+    assert transport.sent_buttons[-1] == (USER, router_module.NO_FILES, router_module.MENU)
+    await router.handle(Inbound("m2", USER, "other", text="sticker"), transport)
+    assert transport.sent_buttons[-1] == (USER, router_module.UNREADABLE, router_module.MENU)
+    assert transport.sent_text == []
+
+
 # a head count turns a split into an even split, by photo caption or by message after it
 async def test_even_split_routes():
     group = fakes.FakeGroup()

@@ -63,7 +63,9 @@ def _parse_kind(
             return Inbound(message_id, user_id, "image", text=body, media_ref=media_ref)
         if media_type.startswith("audio/"):
             return Inbound(message_id, user_id, "audio", media_ref=media_ref)
-        return None
+        # files like pdfs come as application types, the rest by their first part like video
+        kind = "document" if media_type.startswith("application/") else media_type.split("/")[0]
+        return Inbound(message_id, user_id, "other", text=kind)
     return Inbound(message_id, user_id, "text", text=body)
 
 

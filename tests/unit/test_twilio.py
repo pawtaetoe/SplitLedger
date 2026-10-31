@@ -82,6 +82,10 @@ def test_parse_fixtures():
     assert reply == Inbound("SMreply1", "6581234567", "button", text="Save", button_id="save")
     named = twilio.parse_inbound({**load("text.json"), "ProfileName": "Tommy"})
     assert named is not None and named.name == "Tommy"
+    pdf = twilio.parse_inbound({**load("image.json"), "MediaContentType0": "application/pdf"})
+    assert pdf is not None and (pdf.kind, pdf.text) == ("other", "document")
+    video = twilio.parse_inbound({**load("image.json"), "MediaContentType0": "video/mp4"})
+    assert video is not None and (video.kind, video.text) == ("other", "video")
 
 
 # a form with no sid or sender is ignored
