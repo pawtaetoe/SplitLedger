@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from splitledger.channels.layout import SEP
 from splitledger.contracts.messages import Inbound
 from splitledger.contracts.transport import Transport
 from splitledger.db.models import Bill, BillItem, BillStatus, ItemClaim, Participant, User
@@ -23,6 +24,9 @@ from splitledger.split.tokens import ClaimTokens, LoginLinks
 LOG = logging.getLogger(__name__)
 # days a bill can still be closed in words without its button
 CLOSE_DAYS = 30
+# newest open bills offered when the payer has several, a whatsapp list holds ten
+CLOSE_CHOICES = 10
+CLOSE_WHICH = "*Which bill should I close?*\nEveryone on it is told what they owe."
 # no 0 O 1 I so a code read aloud or typed can't be mistaken
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE_LENGTH = 6
@@ -489,7 +493,7 @@ class GroupBills:
         await self._tell(payer_wa, transport, closing)
         return "closed", []
 
-    # close the payer's latest open bill, asked for in words
+    # close the payer's open bill asked for in words, asking which when more than one is open
     async def close_latest(self, inbound: Inbound, transport: Transport) -> None:
         since = datetime.now(UTC) - timedelta(days=CLOSE_DAYS)
         query = (
@@ -501,14 +505,25 @@ class GroupBills:
                 Bill.created_at >= since
             )
             .order_by(Bill.created_at.desc())
-            .limit(1)
+            .limit(CLOSE_CHOICES)
         )
         async with self._sessions() as session:
-            bill = (await session.execute(query)).scalar_one_or_none()
-        if bill is None:
+            bills = list((await session.execute(query)).scalars())
+        if not bills:
             await transport.send_text(inbound.user_id, NOTHING_OPEN)
             return
-        await self._close(inbound, transport, bill, "ask")
+        if len(bills) > 1:
+            # vendor as the label, total and code as its description
+            buttons = [
+                (
+                    f"bill:close:{bill.code}",
+                    f"{bill.vendor or 'Bill'}{SEP}{money(bill.total, bill.currency)} · {bill.code}"
+                )
+                for bill in bills
+            ]
+            await transport.send_buttons(inbound.user_id, CLOSE_WHICH, buttons)
+            return
+        await self._close(inbound, transport, bills[0], "ask")
 
     # ask about anything unsure, else close once and tell everyone their share
     async def _close(self, inbound: Inbound, transport: Transport, bill: Bill, choice: str) -> None:

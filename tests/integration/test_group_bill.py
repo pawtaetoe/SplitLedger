@@ -92,6 +92,25 @@ async def test_code_clash_retries(sessions, monkeypatch):
     assert found == ["AAAAAA", "BBBBBB"]
 
 
+# close bill with two open bills asks which one, newest first, and closes neither
+async def test_close_asks_which(sessions, monkeypatch):
+    group, transport = maker(sessions, DINNER)
+    codes = iter(["AAAAAA", "BBBBBB"])
+    monkeypatch.setattr(bill_module, "new_code", lambda: next(codes))
+    await group.from_receipt(PHOTO, transport)
+    await group.from_receipt(PHOTO, transport)
+    await group.close_latest(Inbound("m2", ME, "text", text="close bill"), transport)
+    to, text, buttons = transport.sent_buttons[-1]
+    assert (to, text) == (ME, bill_module.CLOSE_WHICH)
+    assert buttons == [
+        ("bill:close:BBBBBB", "Jumbo — SGD 118.80 · BBBBBB"),
+        ("bill:close:AAAAAA", "Jumbo — SGD 118.80 · AAAAAA")
+    ]
+    async with sessions() as session:
+        statuses = (await session.execute(select(Bill.status))).scalars().all()
+    assert {status.value for status in statuses} == {"OPEN"}
+
+
 # an even split needs only the total and the payer covers the odd cents
 async def test_even_split_from_photo(sessions):
     group, transport = maker(sessions, ReceiptDraft(currency="CHF", total_cents=25669))
