@@ -69,6 +69,7 @@ BY_ITEM = frozenset({"dish", "dishes", "item", "items", "own", "had"})
 REPEAT_WORDS = frozenset({"every", "monthly", "weekly", "yearly", "upcoming"})
 HELP = "*What would you like to do?*\nTap one below."
 UNCLEAR = "*Sorry, I didn't catch that*\nTap one below, or type something like _coffee 4.50_."
+STALE = "*That button no longer works*\nTap one below instead."
 UNREADABLE = (
     "*I can't read that kind of message*\nSend text, a photo or a voice note, or tap one below."
 )
@@ -242,7 +243,8 @@ class Router:
             key = button_id.removeprefix("receipt:")
             await self._logger.confirm_receipt(inbound, key, transport)
             return
-        await transport.send_text(inbound.user_id, button_id)
+        # a button from an older version of the bot
+        await self.menu(inbound, transport, STALE)
 
     # a photo is a receipt unless its caption asks to split
     async def _image(self, inbound: Inbound, transport: Transport) -> None:

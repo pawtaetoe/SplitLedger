@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from splitledger.channels.simulator import simulator
+from splitledger.handlers.router import STALE
 from splitledger.main import app
 from tests.fakes.router import fake_router
 
@@ -41,8 +42,8 @@ def test_simulator_image_echo(monkeypatch):
     assert media.content == b"fake-png"
 
 
-# clicking a button echoes its id
-def test_simulator_button_echo(monkeypatch):
+# clicking a button reaches the router, an unknown one gets the stale note
+def test_simulator_button_routes(monkeypatch):
     monkeypatch.setattr(simulator, "router", fake_router())
     simulator.reset()
     client = TestClient(app)
@@ -50,4 +51,4 @@ def test_simulator_button_echo(monkeypatch):
         "/dev/chat/button", json={"user": "alice", "button_id": "save"}
     )
     assert response.status_code == 200
-    assert response.json()["messages"][-1]["text"] == "save"
+    assert response.json()["messages"][-1]["text"].startswith(STALE)

@@ -63,6 +63,10 @@ def landed(
         return "help"
     if UNCLEAR in replies:
         return "unclear"
+    if router_module.STALE in replies:
+        return "stale"
+    if router_module.UNREADABLE in replies:
+        return "unreadable"
     calls = [call for call in logger.calls if call != "transcribe"]
     return calls[-1] if calls else "echo"
 
@@ -97,9 +101,9 @@ PROTOCOL_ROWS = [
     (button("cat:abc"), "on_category"),
     (text("menu"), "help"),
     (text("Help"), "help"),
-    (button("save"), "echo"),
+    (button("save"), "stale"),
     (image(None), "log_receipt"),
-    (audio(None), "echo")
+    (audio(None), "unreadable")
 ]
 
 
